@@ -1,0 +1,12 @@
+<launch>
+    <!-- 启动kortex_driver -->
+    <include file="$(find kortex_driver)/launch/kortex_driver.launch">
+        <arg name="arm" value="gen3_lite"/>
+    </include>
+
+    <!-- 启动usb_data_node.py -->
+    <node name="usb_data_node" pkg="usb_data_ros" type="usb_data_node.py" output="screen" launch-prefix="gnome-terminal --command='"/>
+
+    <!-- 启动glove_controller -->
+    <node name="glove_controller" pkg="glove_control" type="glove_controller" output="screen" launch-prefix="gnome-terminal --command='"/>
+</launch>
