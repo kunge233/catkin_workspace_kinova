@@ -138,7 +138,7 @@ void gloveCommandCallback(const std_msgs::String::ConstPtr& msg)
             if (axis == 'X' || axis == 'Y' || axis == 'Z') {
                 // 计算角度差值，并确定角速度的正负
                 //int delta_angle = value - last_rotation_angle;
-                double angularSpeed = (value > 0) ? ASPEED_2 : -ASPEED_2;
+                double angularSpeed = (value > 10 || value < -10) ? (value > 0 ? ASPEED_2 : -ASPEED_2) : 0.0;
                 // 根据轴逐个设置角速度，并确保其他轴的角速度为0
                 twistCommand.twist.angular_x = (axis == 'X') ? angularSpeed : 0.0;
                 twistCommand.twist.angular_y = (axis == 'Y') ? angularSpeed : 0.0;
@@ -160,7 +160,7 @@ void gloveCommandCallback(const std_msgs::String::ConstPtr& msg)
             if (fingerValue < 0) {
                 fingerValue = 0;
             }
-            sendGripperCommand(fingerValue);
+            // sendGripperCommand(fingerValue);
         } 
             break;
         default:

@@ -4,6 +4,8 @@
 #include "std_msgs/Empty.h"  
 #include <boost/bind.hpp>
 #include <kortex_driver/TwistCommand.h>
+#include <thread>
+#include <atomic>
 
 #include <kortex_driver/Base_ClearFaults.h>
 #include <kortex_driver/CartesianSpeed.h>
@@ -32,8 +34,28 @@
 std::string robot_name = "my_gen3_lite";
 
 class GloveController {
+public:
+    GloveController() {
+        // 初始化发布者和订阅者
+        usbDataSub = nh_.subscribe("usb_data", 10, &GloveController::gloveCommandCallback, this);
+        pub = nh_.advertise<kortex_driver::TwistCommand>("/my_gen3_lite/in/cartesian_velocity", 10);
+        stop_pub = nh_.advertise<std_msgs::Empty>("/my_gen3_lite/in/stop", 10);
+    }
+
+    ~GloveController() {
+        // 清理资源
+    }
+
+    void run() {
+        ros::Rate rate(10);
+        while (ros::ok()) {
+            ros::spinOnce();
+            rate.sleep();
+        }
+    }
+
 private:
-    ros::NodeHandle nh;
+    ros::NodeHandle nh_;
     ros::Publisher pub;
     ros::Publisher stop_pub;
     ros::Subscriber usbDataSub;
@@ -55,7 +77,7 @@ private:
         int value = std::stoi(value_str);
         char speedLevel_str = instruction[2];
         int speedLevel = speedLevel_str - '0';  // 获取挡位数字
-        double fingerValue = 100;
+        double fingerValue = 1.0;
 
         kortex_driver::TwistCommand twistCommand;
         twistCommand.reference_frame = 0;
@@ -90,7 +112,7 @@ private:
             case 'R':  // 转动指令
                 if (axis == 'X' || axis == 'Y' || axis == 'Z') {
                     // 计算角度差值，并确定角速度的正负
-                    double angularSpeed = (value > 0) ? ASPEED_2 : -ASPEED_2;
+                    double angularSpeed = (value > 10 || value < -10) ? (value > 0 ? ASPEED_2 : -ASPEED_2) : 0.0;
                     // 根据轴逐个设置角速度，并确保其他轴的角速度为0
                     twistCommand.twist.angular_x = (axis == 'X') ? angularSpeed : 0.0;
                     twistCommand.twist.angular_y = (axis == 'Y') ? angularSpeed : 0.0;
@@ -105,10 +127,13 @@ private:
             case 'G': {
                 // 夹爪指令
                 // 计算变换后的value
-                fingerValue = (100 - value) * 2;
+                fingerValue = 1 - 0.01 * value;
                 // 如果结果为负数，转为0
                 if (fingerValue < 0) {
                     fingerValue = 0;
+                }
+                if (fingerValue > 1) {
+                    fingerValue = 1;
                 }
                 sendGripperCommand(fingerValue);
             } 
@@ -142,7 +167,7 @@ private:
     double getSpeedByLevel(int level) {
         // 挡位速度
         switch (level) {
-        case 1: return LSPEED_1;
+        case 1: return 0.0;
         case 2: return LSPEED_2;
         case 3: return LSPEED_3;
         default: return 0.0;  // 如果挡位无效，返回0
@@ -150,7 +175,7 @@ private:
     }
 
     void publishStopCommand() {
-        // 停止指令发布
+        // 停止指令
         std::string stop_topic = "/my_gen3_lite/in/stop";
         
         // 确保已经创建了发布者
@@ -167,58 +192,35 @@ private:
     bool sendGripperCommand(double value) {
         // 夹爪控制逻辑
         // Initialize the ServiceClient
-        ros::ServiceClient service_client_send_gripper_command = nh.serviceClient<kortex_driver::SendGripperCommand>("/" + robot_name + "/base/send_gripper_command");
+        ros::ServiceClient service_client_send_gripper_command = nh_.serviceClient<kortex_driver::SendGripperCommand>("/my_gen3_lite/base/send_gripper_command");
         kortex_driver::SendGripperCommand service_send_gripper_command;
 
         // Initialize the request
-        kortex_driver::GripperCommand input;
         kortex_driver::Finger finger;
         finger.finger_identifier = 0; // 根据需要设置手指标识符
         finger.value = value; // 设置夹爪开合程度
-        input.gripper.finger.push_back(finger);
-        input.mode = kortex_driver::GripperMode::GRIPPER_POSITION; // 设置模式为位置控制
-
-        service_send_gripper_command.request.input = input;
+        service_send_gripper_command.request.input.gripper.finger.push_back(finger);
+        service_send_gripper_command.request.input.mode = kortex_driver::GripperMode::GRIPPER_POSITION;
 
         if (service_client_send_gripper_command.call(service_send_gripper_command)) {
             ROS_INFO("The gripper command was sent successfully.");
-            return true;
+
         } else {
             std::string error_string = "Failed to call service for sending gripper command";
             ROS_ERROR("%s", error_string.c_str());
             return false;
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        return true;
     }
 
     // 其他私有函数...
-
-    public:
-    GloveController(int _argc, char **_argv) {
-        // 初始化ROS节点
-        ros::init(_argc, _argv, "motion_controller");
-        ros::NodeHandle nh;
-
-        // 初始化发布者和订阅者
-        usbDataSub = nh.subscribe("usb_data", 10, &GloveController::gloveCommandCallback, this);
-        pub = nh.advertise<kortex_driver::TwistCommand>("/my_gen3_lite/in/cartesian_velocity", 10);
-        stop_pub = nh.advertise<std_msgs::Empty>("/my_gen3_lite/in/stop", 10);
-    }
-
-    ~GloveController() {
-        // 清理资源
-    }
-
-    void run() {
-        ros::Rate rate(10);
-        while (ros::ok()) {
-            ros::spinOnce();
-            rate.sleep();
-        }
-    }
 };
 
 int main(int argc, char **argv) {
-    GloveController controller(argc, argv);
+    ros::init(argc, argv, "motion_controller");
+
+    GloveController controller;
     controller.run();
     return 0;
 }

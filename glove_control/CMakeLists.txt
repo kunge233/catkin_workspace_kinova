@@ -135,7 +135,7 @@ include_directories(
 ## Declare a C++ executable
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
-add_executable(glove_controller src/glove_controller.cpp)
+add_executable(glove_controller_process src/glove_controller_process.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -148,7 +148,14 @@ add_executable(glove_controller src/glove_controller.cpp)
 # add_dependencies(${PROJECT_NAME}_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
-target_link_libraries(glove_controller
+target_link_libraries(glove_controller_process
+  ${catkin_LIBRARIES}
+)
+
+# Declare a C++ executable for the class version
+add_executable(glove_controller_class src/glove_controller_class.cpp)
+# Link the executable to the catkin libraries
+target_link_libraries(glove_controller_class
   ${catkin_LIBRARIES}
 )
 
@@ -171,6 +178,15 @@ target_link_libraries(glove_controller
 # install(TARGETS ${PROJECT_NAME}_node
 #   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 # )
+# Install the process version executable
+install(TARGETS glove_controller_process
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+# Install the class version executable
+install(TARGETS glove_controller_class
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
 ## Mark libraries for installation
 ## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_libraries.html
