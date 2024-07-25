@@ -2,6 +2,7 @@
 #include "std_msgs/String.h"
 #include <thread>
 #include <atomic>
+#include "kinova_gen3_lite_control/TargetPose.h"
 
 #include <kortex_driver/Base_ClearFaults.h>
 #include <kortex_driver/CartesianSpeed.h>
@@ -25,6 +26,9 @@ bool all_notifs_succeeded = true;
 std::atomic<int> last_action_notification_event{0};
 std::atomic<int> last_action_notification_id{0};
 
+// 设置超时时间（例如10秒）
+ros::Duration timeout(10);
+
 // 全局变量来跟踪当前的 identifier 值
 int current_identifier = 1000; // 从1000开始
 
@@ -34,8 +38,11 @@ void notification_callback(const kortex_driver::ActionNotification& notif)
   last_action_notification_id = notif.handle.identifier;
 }
 
-bool wait_for_action_end_or_abort()
+// 检查动作是否结束、中止或超时的函数
+bool wait_for_action_end_or_abort(ros::Duration timeout)
 {
+  const ros::Time start_time = ros::Time::now(); // 记录开始时间
+
   while (ros::ok())
   {
     if (last_action_notification_event.load() == kortex_driver::ActionEvent::ACTION_END)
@@ -49,6 +56,13 @@ bool wait_for_action_end_or_abort()
       all_notifs_succeeded = false;
       return false;
     }
+
+    // 检查是否超时
+    if ((ros::Time::now() - start_time) > timeout) {
+        ROS_WARN("Action timed out.");
+        return false;
+    }
+
     ros::spinOnce();
     ros::Duration(0.1).sleep(); // 稍作延时，避免CPU占用过高
   }
@@ -89,7 +103,7 @@ bool home_the_robot(ros::NodeHandle n, const std::string &robot_name)
         return false;
     }
 
-    return wait_for_action_end_or_abort();
+    return wait_for_action_end_or_abort(timeout);
 }
 
 /**
@@ -124,7 +138,34 @@ bool cartesian_action(ros::NodeHandle n, const std::string &robot_name, const ko
         return false;
     }
 
-    wait_for_action_end_or_abort();
+    return wait_for_action_end_or_abort(timeout);
+    // return true;
+}
+
+// 服务回调函数
+bool move_robot_to_pose_callback(kinova_gen3_lite_control::TargetPose::Request  &req, kinova_gen3_lite_control::TargetPose::Response &res) {
+    ros::NodeHandle n;
+    std::string robot_name = "my_gen3_lite"; // 机器人名称，根据实际情况修改
+
+    // 定义机器人的姿态
+    kortex_driver::ConstrainedPose constrained_pose;
+    constrained_pose.target_pose.x = req.x;
+    constrained_pose.target_pose.y = req.y;
+    constrained_pose.target_pose.z = req.z;
+    constrained_pose.target_pose.theta_x = req.theta_x;
+    constrained_pose.target_pose.theta_y = req.theta_y;
+    constrained_pose.target_pose.theta_z = req.theta_z;
+
+    // 调用函数执行动作
+    bool success = cartesian_action(n, robot_name, constrained_pose);
+
+    if (success) {
+        res.success = true;
+        res.message = "Robot moved to the specified pose successfully.";
+    } else {
+        res.success = false;
+        res.message = "Failed to move the robot to the specified pose.";
+    }
 
     return true;
 }
@@ -149,7 +190,7 @@ bool set_cartesian_reference_frame(ros::NodeHandle n, const std::string &robot_n
   }
 
   // Wait a bit
-  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
   return true;
 }
@@ -159,7 +200,6 @@ int main(int argc, char **argv) {
     ros::NodeHandle n;
 
     std::string robot_name = "my_gen3_lite";
-    bool success = true;
 
     kortex_driver::ConstrainedPose my_constrained_pose;
     // 定义速度限制
@@ -168,13 +208,13 @@ int main(int argc, char **argv) {
     my_cartesian_speed.orientation = 15.0f;
     my_constrained_pose.constraint.oneof_type.speed.push_back(my_cartesian_speed);
 
-    //test position
-    my_constrained_pose.target_pose.x = 0.374f;
-    my_constrained_pose.target_pose.y = 0.081f;
-    my_constrained_pose.target_pose.z = 0.450f;
-    my_constrained_pose.target_pose.theta_x = -57.6f;
-    my_constrained_pose.target_pose.theta_y = 91.1f;
-    my_constrained_pose.target_pose.theta_z = 2.3f;
+    // //test position
+    // my_constrained_pose.target_pose.x = 0.374f;
+    // my_constrained_pose.target_pose.y = 0.081f;
+    // my_constrained_pose.target_pose.z = 0.450f;
+    // my_constrained_pose.target_pose.theta_x = -57.6f;
+    // my_constrained_pose.target_pose.theta_y = 91.1f;
+    // my_constrained_pose.target_pose.theta_z = 2.3f;
 
     // We need to call this service to activate the Action Notification on the kortex_driver node.
     ros::ServiceClient service_client_activate_notif = n.serviceClient<kortex_driver::OnNotificationActionTopic>("/" + robot_name + "/base/activate_publishing_of_action_topic");
@@ -192,13 +232,19 @@ int main(int argc, char **argv) {
     ros::Duration(1.00).sleep();
     ros::Subscriber sub = n.subscribe("/" + robot_name  + "/action_topic", 1000, notification_callback);
 
-      // Run the example
-    success &= set_cartesian_reference_frame(n, robot_name);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    success &= home_the_robot(n, robot_name);
-    success &= cartesian_action(n, robot_name, my_constrained_pose);
-    success &= all_notifs_succeeded;
-    
-    return success ? 0 : 1;
+    set_cartesian_reference_frame(n, robot_name);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
+
+    // 创建服务服务器
+    ros::ServiceServer service = n.advertiseService("move_robot_to_pose", move_robot_to_pose_callback);
+    ROS_INFO("Ready to move robot to specified pose.");
+
+    // 等待服务请求
+    ros::spin();
+
+    return 0;
+
+    // home_the_robot(n, robot_name);
+    // cartesian_action(n, robot_name, my_constrained_pose);
 }
