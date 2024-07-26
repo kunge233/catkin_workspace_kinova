@@ -1,0 +1,4 @@
+float32 value  # 夹爪的开合程度，1表示完全关闭，0表示完全打开
+---
+bool success
+string message

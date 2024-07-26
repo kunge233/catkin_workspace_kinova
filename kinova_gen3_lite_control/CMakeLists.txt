@@ -58,6 +58,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_service_files(
   FILES
   TargetPose.srv
+  GripperValue.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -105,7 +106,7 @@ generate_messages(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES kinova_gen3_lite_control
-   CATKIN_DEPENDS kortex_driver roscpp rospy std_msgs message_generation
+   CATKIN_DEPENDS kortex_driver roscpp rospy std_msgs message_runtime
 #  DEPENDS system_lib
 )
 

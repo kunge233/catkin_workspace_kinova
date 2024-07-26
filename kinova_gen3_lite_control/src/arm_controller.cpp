@@ -1,8 +1,10 @@
 #include "ros/ros.h"
 #include "std_msgs/String.h"
+#include "std_srvs/Trigger.h"
 #include <thread>
 #include <atomic>
 #include "kinova_gen3_lite_control/TargetPose.h"
+#include "kinova_gen3_lite_control/GripperValue.h"
 
 #include <kortex_driver/Base_ClearFaults.h>
 #include <kortex_driver/CartesianSpeed.h>
@@ -106,6 +108,25 @@ bool home_the_robot(ros::NodeHandle n, const std::string &robot_name)
     return wait_for_action_end_or_abort(timeout);
 }
 
+// 定义Home服务的回调函数
+bool home_robot_callback(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &res) {
+    ros::NodeHandle n;
+    std::string robot_name = "my_gen3_lite"; 
+
+    // 调用home_the_robot函数
+    bool success = home_the_robot(n, robot_name);
+
+    if (success) {
+        res.success = true;
+        res.message = "Robot homed successfully.";
+    } else {
+        res.success = false;
+        res.message = "Failed to home the robot.";
+    }
+
+    return true;
+}
+
 /**
  * 操纵机械臂到达指定姿态的函数。
  * @param n 节点句柄，用于创建服务客户端。
@@ -142,7 +163,7 @@ bool cartesian_action(ros::NodeHandle n, const std::string &robot_name, const ko
     // return true;
 }
 
-// 服务回调函数
+// 服务回调函数1
 bool move_robot_to_pose_callback(kinova_gen3_lite_control::TargetPose::Request  &req, kinova_gen3_lite_control::TargetPose::Response &res) {
     ros::NodeHandle n;
     std::string robot_name = "my_gen3_lite"; // 机器人名称，根据实际情况修改
@@ -168,6 +189,58 @@ bool move_robot_to_pose_callback(kinova_gen3_lite_control::TargetPose::Request  
     }
 
     return true;
+}
+
+bool sendGripperCommand(ros::NodeHandle n, double value) {
+    // 夹爪控制逻辑
+    // Initialize the ServiceClient
+    ros::ServiceClient service_client_send_gripper_command = n.serviceClient<kortex_driver::SendGripperCommand>("/my_gen3_lite/base/send_gripper_command");
+    kortex_driver::SendGripperCommand service_send_gripper_command;
+
+    // 限制value的值在0到1之间
+    if (value < 0.0) {
+        value = 0.0;
+    } else if (value > 1.0) {
+        value = 1.0;
+    }
+
+    // Initialize the request
+    kortex_driver::Finger finger;
+    finger.finger_identifier = 0; // 根据需要设置手指标识符
+    finger.value = value; // 设置夹爪开合程度
+    service_send_gripper_command.request.input.gripper.finger.push_back(finger);
+    service_send_gripper_command.request.input.mode = kortex_driver::GripperMode::GRIPPER_POSITION;
+
+    // 打印夹爪将要到达的闭合程度
+    ROS_INFO("Setting gripper to value of close: %f", finger.value);
+
+    if (service_client_send_gripper_command.call(service_send_gripper_command)) {
+        ROS_INFO("The gripper command was sent successfully.");
+
+    } else {
+        std::string error_string = "Failed to call service for sending gripper command";
+        ROS_ERROR("%s", error_string.c_str());
+        return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    return true;
+}
+
+bool gripper_control_callback(kinova_gen3_lite_control::GripperValue::Request& req, kinova_gen3_lite_control::GripperValue::Response& res) {
+    ros::NodeHandle n; 
+    // 调用sendGripperCommand函数，传入从服务请求中获取的值
+    double value = static_cast<double>(req.value);
+    bool success = sendGripperCommand(n, value);
+
+    if (success) {
+        res.message = "Gripper command sent successfully.";
+        res.success = true;
+        return true;
+    } else {
+        res.message = "Failed to send gripper command.";
+        res.success = false;
+        return false;
+    }
 }
 
 // This function sets the reference frame to the robot's base
@@ -236,15 +309,18 @@ int main(int argc, char **argv) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
 
-    // 创建服务服务器
-    ros::ServiceServer service = n.advertiseService("move_robot_to_pose", move_robot_to_pose_callback);
+    // 创建move_robot_to_pose服务器
+    ros::ServiceServer move_service = n.advertiseService("move_robot_to_pose", move_robot_to_pose_callback);
     ROS_INFO("Ready to move robot to specified pose.");
+
+    // 注册Home服务
+    ros::ServiceServer home_service = n.advertiseService("home_robot", home_robot_callback);
+
+    // 夹爪控制服务
+    ros::ServiceServer gripper_service = n.advertiseService("gripper_control", gripper_control_callback);
 
     // 等待服务请求
     ros::spin();
 
     return 0;
-
-    // home_the_robot(n, robot_name);
-    // cartesian_action(n, robot_name, my_constrained_pose);
 }
