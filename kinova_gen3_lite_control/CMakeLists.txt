@@ -59,6 +59,7 @@ add_service_files(
   FILES
   TargetPose.srv
   GripperValue.srv
+  ActionTrigger.srv
 )
 
 ## Generate actions in the 'action' folder

@@ -1,0 +1,10 @@
+# 服务请求
+#RETRACT_ACTION     1
+#HOME_ACTION        2
+#PACKAGING_ACTION   3
+#ZERO_ACTION        4
+int32 action_identifier  # 动作的标识符
+---
+# 服务响应
+bool success            # 动作执行成功与否
+string message          # 执行结果的描述信息

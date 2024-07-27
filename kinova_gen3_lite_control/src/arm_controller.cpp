@@ -6,6 +6,7 @@
 #include <atomic>
 #include "kinova_gen3_lite_control/TargetPose.h"
 #include "kinova_gen3_lite_control/GripperValue.h"
+#include "kinova_gen3_lite_control/ActionTrigger.h"
 
 #include <kortex_driver/Base_ClearFaults.h>
 #include <kortex_driver/CartesianSpeed.h>
@@ -22,7 +23,10 @@
 #include <kortex_driver/GetMeasuredCartesianPose.h>
 #include <kortex_driver/OnNotificationActionTopic.h>
 
-#define HOME_ACTION_IDENTIFIER 2
+#define RETRACT_ACTION_IDENTIFIER   1
+#define HOME_ACTION_IDENTIFIER      2
+#define PACKAGING_ACTION_IDENTIFIER 3
+#define ZERO_ACTION_IDENTIFIER      4
 
 bool all_notifs_succeeded = true;
 
@@ -72,60 +76,65 @@ bool wait_for_action_end_or_abort(ros::Duration timeout)
   return false;
 }
 
-// 让机械臂回到home位置的函数
-bool home_the_robot(ros::NodeHandle n, const std::string &robot_name)
-{
-    // 读取Home动作
+// 通用的动作执行函数
+bool execute_action_by_identifier(ros::NodeHandle n, const std::string &robot_name, int action_identifier) {
     ros::ServiceClient service_client_read_action = n.serviceClient<kortex_driver::ReadAction>("/" + robot_name + "/base/read_action");
     kortex_driver::ReadAction service_read_action;
 
-    // The Home Action is used to home the robot. It cannot be deleted and is always ID #2:
-    service_read_action.request.input.identifier = HOME_ACTION_IDENTIFIER;
+    // 设置动作标识符
+    service_read_action.request.input.identifier = action_identifier;
 
-    if (!service_client_read_action.call(service_read_action))
-    {
+    if (!service_client_read_action.call(service_read_action)) {
         std::string error_string = "Failed to call ReadAction";
         ROS_ERROR("%s", error_string.c_str());
         return false;
     }
 
-    // 执行读取到的Home动作
     ros::ServiceClient service_client_execute_action = n.serviceClient<kortex_driver::ExecuteAction>("/" + robot_name + "/base/execute_action");
     kortex_driver::ExecuteAction service_execute_action;
 
     service_execute_action.request.input = service_read_action.response.output;
-    
-    if (service_client_execute_action.call(service_execute_action))
-    {
-        ROS_INFO("The Home position action was sent to the robot.");
-    }
-    else
-    {
+
+    if (service_client_execute_action.call(service_execute_action)) {
+        ROS_INFO("The action was sent to the robot.");
+        return wait_for_action_end_or_abort(timeout); // 假定这是您定义的等待动作结束或中止的函数
+    } else {
         std::string error_string = "Failed to call ExecuteAction";
         ROS_ERROR("%s", error_string.c_str());
         return false;
     }
-
-    return wait_for_action_end_or_abort(timeout);
 }
 
-// 定义Home服务的回调函数
-bool home_robot_callback(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &res) {
+// 通用的服务回调函数
+bool action_trigger_callback(kinova_gen3_lite_control::ActionTrigger::Request &req, kinova_gen3_lite_control::ActionTrigger::Response &res) {
     ros::NodeHandle n;
     std::string robot_name = "my_gen3_lite"; 
 
-    // 调用home_the_robot函数
-    bool success = home_the_robot(n, robot_name);
+    bool success = execute_action_by_identifier(n, robot_name, req.action_identifier);
 
-    if (success) {
-        res.success = true;
-        res.message = "Robot homed successfully.";
-    } else {
-        res.success = false;
-        res.message = "Failed to home the robot.";
+    switch (req.action_identifier) {
+        case RETRACT_ACTION_IDENTIFIER:
+            res.message = "RETRACT position action triggered.";
+            ROS_INFO("The robot was moved to the RETRACT position.");
+            break;
+        case HOME_ACTION_IDENTIFIER:
+            res.message = "HOME action triggered.";
+            ROS_INFO("The robot was moved to the HOME position.");
+            break;
+        case PACKAGING_ACTION_IDENTIFIER:
+            res.message = "PACKAGING action triggered.";
+            ROS_INFO("The robot was moved to the PACKAGING position.");
+            break;
+        case ZERO_ACTION_IDENTIFIER:
+            res.message = "ZERO action triggered.";
+            ROS_INFO("The robot was moved to the ZERO position.");
+            break;
+        default:
+            res.message = "Unknown action identifier.";
+            success = false;
     }
-
-    return true;
+    res.success = success;
+    return success;
 }
 
 /**
@@ -358,8 +367,8 @@ int main(int argc, char **argv) {
     ros::ServiceServer move_service = n.advertiseService("move_robot_to_pose", move_robot_to_pose_callback);
     ROS_INFO("Ready to move robot to specified pose.");
 
-    // 注册Home服务
-    ros::ServiceServer home_service = n.advertiseService("home_robot", home_robot_callback);
+    // 注册Home服务+其他服务，使用相应的动作标识符
+    ros::ServiceServer action_service = n.advertiseService("action_trigger", action_trigger_callback);
 
     // 夹爪控制服务
     ros::ServiceServer gripper_service = n.advertiseService("gripper_control", gripper_control_callback);
