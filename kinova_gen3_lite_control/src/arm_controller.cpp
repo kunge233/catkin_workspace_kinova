@@ -1,6 +1,7 @@
 #include "ros/ros.h"
 #include "std_msgs/String.h"
 #include "std_srvs/Trigger.h"
+#include "std_msgs/Empty.h"  
 #include <thread>
 #include <atomic>
 #include "kinova_gen3_lite_control/TargetPose.h"
@@ -243,6 +244,50 @@ bool gripper_control_callback(kinova_gen3_lite_control::GripperValue::Request& r
     }
 }
 
+void publishStopCommand() {
+    // 停止指令
+    std::string stop_topic = "/my_gen3_lite/in/stop";
+
+    static ros::Publisher stop_pub;
+    if (!stop_pub) {
+        stop_pub = ros::NodeHandle().advertise<std_msgs::Empty>(stop_topic, 10);
+    }
+        
+    std_msgs::Empty stop_command;
+    stop_pub.publish(stop_command);
+    ROS_INFO("Stop command published!");
+}
+
+bool stop_robot_callback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res) {
+    publishStopCommand();
+    ROS_INFO("Robot stop service called.");
+    res.message = "Stop robot successfully.";
+    res.success = true;
+    return true; 
+}
+
+void clearFaultsCommand() {
+    // 停止指令
+    std::string clear_faults_topic = "/my_gen3_lite/in/clear_faults";
+
+    static ros::Publisher clear_faults_pub;
+    if (!clear_faults_pub) {
+        clear_faults_pub = ros::NodeHandle().advertise<std_msgs::Empty>(clear_faults_topic, 10);
+    }
+        
+    std_msgs::Empty clear_faults_command;
+    clear_faults_pub.publish(clear_faults_command);
+    ROS_INFO("Clear faults command published!");
+}
+
+bool clear_faults_callback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res) {
+    clearFaultsCommand();
+    ROS_INFO("Clear Robot faults service called.");
+    res.message = "Clear faults successfully.";
+    res.success = true;
+    return true; 
+}
+
 // This function sets the reference frame to the robot's base
 bool set_cartesian_reference_frame(ros::NodeHandle n, const std::string &robot_name)
 {
@@ -318,6 +363,12 @@ int main(int argc, char **argv) {
 
     // 夹爪控制服务
     ros::ServiceServer gripper_service = n.advertiseService("gripper_control", gripper_control_callback);
+
+    // stop服务器
+    ros::ServiceServer stop_service = n.advertiseService("stop_robot", stop_robot_callback);
+    
+    // clear faults服务器
+    ros::ServiceServer clear_faults_service = n.advertiseService("clear_faults", clear_faults_callback);
 
     // 等待服务请求
     ros::spin();
