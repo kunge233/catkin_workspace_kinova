@@ -28,15 +28,14 @@
 #define PACKAGING_ACTION_IDENTIFIER 3
 #define ZERO_ACTION_IDENTIFIER      4
 
-bool all_notifs_succeeded = true;
-
 std::atomic<int> last_action_notification_event{0};
 std::atomic<int> last_action_notification_id{0};
+std::atomic<bool> all_notifs_succeeded{true};
 
 // 设置超时时间（例如10秒）
 ros::Duration timeout(10);
 
-// 全局变量来跟踪当前的 identifier 值
+// 全局变量来跟踪当前的action identifier 值
 int current_identifier = 1000; // 从1000开始
 
 void notification_callback(const kortex_driver::ActionNotification& notif)
@@ -71,7 +70,7 @@ bool wait_for_action_end_or_abort(ros::Duration timeout)
     }
 
     ros::spinOnce();
-    ros::Duration(0.1).sleep(); // 稍作延时，避免CPU占用过高
+    ros::Duration(0.05).sleep(); // 稍作延时，避免CPU占用过高
   }
   return false;
 }
@@ -159,7 +158,7 @@ bool cartesian_action(ros::NodeHandle n, const std::string &robot_name, const ko
     service_execute_action.request.input.handle.action_type = kortex_driver::ActionType::REACH_POSE;
 
     // 调用服务并检查结果
-    last_action_notification_event = 0;
+    last_action_notification_event.store(0);
     if (service_client_execute_action.call(service_execute_action)) {
         ROS_INFO("Pose %d was sent to the robot.", service_execute_action.request.input.handle.identifier);
     } else {
@@ -343,7 +342,7 @@ int main(int argc, char **argv) {
     // my_constrained_pose.target_pose.theta_y = 91.1f;
     // my_constrained_pose.target_pose.theta_z = 2.3f;
 
-    // We need to call this service to activate the Action Notification on the kortex_driver node.
+    // 激活动作通知
     ros::ServiceClient service_client_activate_notif = n.serviceClient<kortex_driver::OnNotificationActionTopic>("/" + robot_name + "/base/activate_publishing_of_action_topic");
     kortex_driver::OnNotificationActionTopic service_activate_notif;
     if (service_client_activate_notif.call(service_activate_notif))
@@ -357,11 +356,13 @@ int main(int argc, char **argv) {
         return false;
     }
     ros::Duration(1.00).sleep();
-    ros::Subscriber sub = n.subscribe("/" + robot_name  + "/action_topic", 1000, notification_callback);
 
+    ros::Subscriber sub = n.subscribe("/" + robot_name  + "/action_topic", 1000, notification_callback);
+    ROS_INFO("Subscribed to action_topic");
+
+    // 设置笛卡尔参考系
     set_cartesian_reference_frame(n, robot_name);
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
 
     // 创建move_robot_to_pose服务器
     ros::ServiceServer move_service = n.advertiseService("move_robot_to_pose", move_robot_to_pose_callback);
