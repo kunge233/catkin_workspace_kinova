@@ -222,3 +222,7 @@ install(TARGETS glove_controller_class
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+execute_process(
+  COMMAND find ${CMAKE_CURRENT_SOURCE_DIR}/scripts -name "*.py" -exec chmod +x {} \;
+)

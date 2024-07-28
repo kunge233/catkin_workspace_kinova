@@ -3,17 +3,13 @@ project(kinova_gen3_lite_control)
 
 ## Compile as C++11, supported in ROS Kinetic and newer
 # add_compile_options(-std=c++11)
+add_compile_options(-std=c++11)
+add_definitions(-D_OS_UNIX)
 
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS
-  kortex_driver
-  roscpp
-  rospy
-  std_msgs
-  message_generation
-)
+find_package(catkin REQUIRED COMPONENTS roscpp rospy std_msgs geometry_msgs message_generation actionlib_msgs actionlib kortex_driver)
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
@@ -60,6 +56,8 @@ add_service_files(
   TargetPose.srv
   GripperValue.srv
   ActionTrigger.srv
+  NamedPose.srv
+  GetPose.srv
 )
 
 ## Generate actions in the 'action' folder
@@ -73,6 +71,7 @@ add_service_files(
 generate_messages(
   DEPENDENCIES
   std_msgs
+  geometry_msgs
 )
 
 ################################################
@@ -107,7 +106,7 @@ generate_messages(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES kinova_gen3_lite_control
-   CATKIN_DEPENDS kortex_driver roscpp rospy std_msgs message_runtime
+    CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs kortex_driver moveit_core moveit_ros_planning moveit_ros_planning_interface
 #  DEPENDS system_lib
 )
 
@@ -161,10 +160,10 @@ target_link_libraries(arm_controller
 
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
-# catkin_install_python(PROGRAMS
-#   scripts/my_python_script
-#   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-# )
+catkin_install_python(PROGRAMS
+  scripts/arm_controller_moveit.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
 
 ## Mark executables for installation
 ## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html
@@ -206,3 +205,7 @@ install(TARGETS arm_controller
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+execute_process(
+  COMMAND find ${CMAKE_CURRENT_SOURCE_DIR}/scripts -name "*.py" -exec chmod +x {} \;
+)

@@ -1,0 +1,3 @@
+# GetPose.srv
+---
+geometry_msgs/Pose pose
