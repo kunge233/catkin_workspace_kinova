@@ -38,6 +38,8 @@ class ArmControllerMoveIt(object):
             self.robot = moveit_commander.RobotCommander("robot_description")
             self.scene = moveit_commander.PlanningSceneInterface(ns=rospy.get_namespace())
             self.arm_group = moveit_commander.MoveGroupCommander(arm_group_name, ns=rospy.get_namespace())
+            self.arm_group.set_planner_id("RRTConnectkConfigDefault")  # 设置规划器
+            self.arm_group.set_planning_time(10)  # 设置规划超时时间（秒）
             self.display_trajectory_publisher = rospy.Publisher(
                 rospy.get_namespace() + 'move_group/display_planned_path',
                 moveit_msgs.msg.DisplayTrajectory,

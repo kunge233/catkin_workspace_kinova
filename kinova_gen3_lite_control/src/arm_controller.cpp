@@ -216,7 +216,7 @@ bool sendGripperCommand(ros::NodeHandle n, double value) {
     // Initialize the request
     kortex_driver::Finger finger;
     finger.finger_identifier = 0; // 根据需要设置手指标识符
-    finger.value = value; // 设置夹爪开合程度
+    finger.value = 1.0 - value; // 设置夹爪开合程度
     service_send_gripper_command.request.input.gripper.finger.push_back(finger);
     service_send_gripper_command.request.input.mode = kortex_driver::GripperMode::GRIPPER_POSITION;
 
