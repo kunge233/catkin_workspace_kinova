@@ -9,11 +9,36 @@ add_definitions(-D_OS_UNIX)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED COMPONENTS roscpp rospy std_msgs geometry_msgs message_generation actionlib_msgs actionlib kortex_driver)
+find_package(catkin REQUIRED 
+  COMPONENTS 
+    roscpp
+    rospy
+    std_msgs
+    geometry_msgs
+    message_generation
+    actionlib_msgs
+    actionlib
+    kortex_driver
+    interactive_markers
+    moveit_core
+    moveit_ros_planning
+    moveit_ros_planning_interface
+    moveit_ros_perception
+    rviz_visual_tools
+    moveit_visual_tools
+    pluginlib
+    geometric_shapes
+    pcl_ros
+    pcl_conversions
+    rosbag
+    tf2_ros
+    tf2_eigen
+    tf2_geometry_msgs
+)
 
 ## System dependencies are found with CMake's conventions
-# find_package(Boost REQUIRED COMPONENTS system)
-
+find_package(Eigen3 REQUIRED)
+find_package(Boost REQUIRED system filesystem date_time thread)
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -104,9 +129,21 @@ generate_messages(
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES kinova_gen3_lite_control
-    CATKIN_DEPENDS roscpp rospy std_msgs geometry_msgs kortex_driver moveit_core moveit_ros_planning moveit_ros_planning_interface
+  INCLUDE_DIRS include
+  LIBRARIES kinova_gen3_lite_control
+  CATKIN_DEPENDS
+    roscpp
+    rospy 
+    std_msgs 
+    geometry_msgs 
+    kortex_driver 
+    moveit_core
+    moveit_visual_tools
+    moveit_ros_planning_interface
+    interactive_markers
+    tf2_geometry_msgs
+  DEPENDS
+    EIGEN3
 #  DEPENDS system_lib
 )
 
@@ -117,9 +154,12 @@ catkin_package(
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
 include_directories(
-# include
+  include
   ${catkin_INCLUDE_DIRS}
+  ${Boost_INCLUDE_DIRS}
 )
+include_directories(${THIS_PACKAGE_INCLUDE_DIRS})
+include_directories(SYSTEM ${catkin_INCLUDE_DIRS} ${Boost_INCLUDE_DIR} ${EIGEN3_INCLUDE_DIRS})
 
 ## Declare a C++ library
 # add_library(${PROJECT_NAME}
@@ -135,6 +175,7 @@ include_directories(
 ## With catkin_make all packages are built within a single CMake context
 ## The recommended prefix ensures that target names across packages don't collide
 add_executable(arm_controller src/arm_controller.cpp)
+add_executable(pick_place_controller src/pick_place_controller.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -145,10 +186,19 @@ add_executable(arm_controller src/arm_controller.cpp)
 ## Add cmake target dependencies of the executable
 ## same as for the library above
 add_dependencies(arm_controller ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(pick_place_controller ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(arm_controller
    ${catkin_LIBRARIES}
+   ${Boost_LIBRARIES}
+)
+target_link_libraries(pick_place_controller
+   ${catkin_LIBRARIES}
+   ${Boost_LIBRARIES}
+  #  moveit_core
+  #  moveit_ros_planning
+  #  moveit_ros_planning_interface
 )
 
 #############
@@ -158,6 +208,12 @@ target_link_libraries(arm_controller
 # all install targets should use catkin DESTINATION variables
 # See http://ros.org/doc/api/catkin/html/adv_user_guide/variables.html
 
+## Mark executables for installation
+## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html
+install(TARGETS arm_controller pick_place_controller
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
@@ -165,11 +221,7 @@ catkin_install_python(PROGRAMS
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-## Mark executables for installation
-## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html
-install(TARGETS arm_controller
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
+
 
 ## Mark libraries for installation
 ## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_libraries.html
