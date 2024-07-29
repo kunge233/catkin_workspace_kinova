@@ -1,0 +1,5 @@
+<launch>
+    <node name="pick_place_controller" pkg="kinova_gen3_lite_control" type="pick_place_controller" ns="/my_gen3_lite" output="screen">
+        <!-- 你可以在这里设置其他参数 -->
+    </node>
+</launch>
