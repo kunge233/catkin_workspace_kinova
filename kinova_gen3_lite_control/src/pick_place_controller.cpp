@@ -38,7 +38,7 @@ void closedGripper(trajectory_msgs::JointTrajectory& posture)
 
     posture.points.resize(1);
     posture.points[0].positions.resize(1);
-    posture.points[0].positions[0] = 0.0; //-0.09;
+    posture.points[0].positions[0] = 0.2; //-0.09;
     posture.points[0].time_from_start = ros::Duration(0.5);
 }
 
@@ -50,11 +50,12 @@ void pick(moveit::planning_interface::MoveGroupInterface& move_group)
     // 设置抓取姿态
     grasps[0].grasp_pose.header.frame_id = "base_link";
     tf2::Quaternion orientation;
-    orientation.setRPY (-tau / 4, 0, -tau / 4);     //(-tau / 4, -tau / 8, -tau / 4);固定轴欧拉角
+    orientation.setRPY (-tau / 4, 0, -tau / 4);     //固定轴欧拉角,此时夹爪正对x轴方向
     grasps[0].grasp_pose.pose.orientation = tf2::toMsg(orientation);
-    grasps[0].grasp_pose.pose.position.x = 0.5; //0.415+0.10;
+    //对象中心的精确位置
+    grasps[0].grasp_pose.pose.position.x = 0.5;
     grasps[0].grasp_pose.pose.position.y = 0;
-    grasps[0].grasp_pose.pose.position.z = 0.5;
+    grasps[0].grasp_pose.pose.position.z = 0.11;
         
     // 设置预抓取接近方式
     grasps[0].pre_grasp_approach.direction.header.frame_id = "base_link";
@@ -91,13 +92,13 @@ void place(moveit::planning_interface::MoveGroupInterface& move_group)
     // 设置放置位置的姿态
     place_location[0].place_pose.header.frame_id = "base_link";
     tf2::Quaternion orientation;
-    orientation.setRPY(0, 0, tau / 4);  // 绕Z轴旋转四分之一圈
+    orientation.setRPY(0, 0, tau / 4);  
     place_location[0].place_pose.pose.orientation = tf2::toMsg(orientation);
 
     // 对于放置位置，将值设置为对象中心的精确位置
     place_location[0].place_pose.pose.position.x = 0;
     place_location[0].place_pose.pose.position.y = 0.5;
-    place_location[0].place_pose.pose.position.z = 0.5;
+    place_location[0].place_pose.pose.position.z = 0.11;
 
     // 设置放置前的接近姿态
     place_location[0].pre_place_approach.direction.header.frame_id = "base_link";
@@ -108,7 +109,7 @@ void place(moveit::planning_interface::MoveGroupInterface& move_group)
 
     // 设置放置后的撤退姿态
     place_location[0].post_place_retreat.direction.header.frame_id = "base_link";
-    // 方向设置为负Y轴方向
+    // 方向设置为负y轴方向
     place_location[0].post_place_retreat.direction.vector.y = -1.0;
     place_location[0].post_place_retreat.min_distance = 0.1;
     place_location[0].post_place_retreat.desired_distance = 0.25;
@@ -136,14 +137,14 @@ void addCollisionObjects(moveit::planning_interface::PlanningSceneInterface& pla
   collision_objects[0].primitives.resize(1); // 形状
   collision_objects[0].primitives[0].type = collision_objects[0].primitives[0].BOX; // 盒子
   collision_objects[0].primitives[0].dimensions.resize(3); // 定义形状的尺寸数组
-  collision_objects[0].primitives[0].dimensions[0] = 0.2; // 设置盒子的长
-  collision_objects[0].primitives[0].dimensions[1] = 0.4; // 设置盒子的宽
-  collision_objects[0].primitives[0].dimensions[2] = 0.4; // 设置盒子的高
+  collision_objects[0].primitives[0].dimensions[0] = 0.3; // 设置盒子的x长
+  collision_objects[0].primitives[0].dimensions[1] = 0.3; // 设置盒子的y宽
+  collision_objects[0].primitives[0].dimensions[2] = 0.06; // 设置盒子的z高
 
   collision_objects[0].primitive_poses.resize(1); // 姿态
-  collision_objects[0].primitive_poses[0].position.x = 0.5;
+  collision_objects[0].primitive_poses[0].position.x = 0.5;//center
   collision_objects[0].primitive_poses[0].position.y = 0;
-  collision_objects[0].primitive_poses[0].position.z = 0.2;
+  collision_objects[0].primitive_poses[0].position.z = 0;
   collision_objects[0].primitive_poses[0].orientation.w = 1.0; // 无旋转
 
   collision_objects[0].operation = collision_objects[0].ADD;
@@ -155,15 +156,15 @@ void addCollisionObjects(moveit::planning_interface::PlanningSceneInterface& pla
   collision_objects[1].primitives.resize(1);
   collision_objects[1].primitives[0].type = collision_objects[1].primitives[0].BOX;
   collision_objects[1].primitives[0].dimensions.resize(3);
-  collision_objects[1].primitives[0].dimensions[0] = 0.4;
-  collision_objects[1].primitives[0].dimensions[1] = 0.2;
-  collision_objects[1].primitives[0].dimensions[2] = 0.4;
+  collision_objects[1].primitives[0].dimensions[0] = 0.3;
+  collision_objects[1].primitives[0].dimensions[1] = 0.3;
+  collision_objects[1].primitives[0].dimensions[2] = 0.06;
 
 
   collision_objects[1].primitive_poses.resize(1);
   collision_objects[1].primitive_poses[0].position.x = 0;
   collision_objects[1].primitive_poses[0].position.y = 0.5;
-  collision_objects[1].primitive_poses[0].position.z = 0.2;
+  collision_objects[1].primitive_poses[0].position.z = 0;
   collision_objects[1].primitive_poses[0].orientation.w = 1.0;
 
   collision_objects[1].operation = collision_objects[1].ADD;
@@ -175,14 +176,15 @@ void addCollisionObjects(moveit::planning_interface::PlanningSceneInterface& pla
   collision_objects[2].primitives.resize(1);
   collision_objects[2].primitives[0].type = collision_objects[1].primitives[0].BOX;
   collision_objects[2].primitives[0].dimensions.resize(3);
-  collision_objects[2].primitives[0].dimensions[0] = 0.02;
-  collision_objects[2].primitives[0].dimensions[1] = 0.02;
-  collision_objects[2].primitives[0].dimensions[2] = 0.2;
+  collision_objects[2].primitives[0].dimensions[0] = 0.06;
+  collision_objects[2].primitives[0].dimensions[1] = 0.06;
+  collision_objects[2].primitives[0].dimensions[2] = 0.16;
+  //object COCA COLA 300ml : 0.06*0.06*0.16
 
   collision_objects[2].primitive_poses.resize(1);
   collision_objects[2].primitive_poses[0].position.x = 0.5;
   collision_objects[2].primitive_poses[0].position.y = 0;
-  collision_objects[2].primitive_poses[0].position.z = 0.5;
+  collision_objects[2].primitive_poses[0].position.z = 0.11;// 0.16/2+0.03
   collision_objects[2].primitive_poses[0].orientation.w = 1.0;
 
   collision_objects[2].operation = collision_objects[2].ADD;
