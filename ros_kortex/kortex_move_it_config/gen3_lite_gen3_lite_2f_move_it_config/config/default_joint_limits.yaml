@@ -6,37 +6,38 @@ default_acceleration_scaling_factor: 1
 # joint_limits.yaml allows the dynamics properties specified in the URDF to be overwritten or augmented as needed
 # Specific joint properties can be changed with the keys [max_position, min_position, max_velocity, max_acceleration]
 # Joint limits can be turned off with [has_velocity_limits, has_acceleration_limits]
+# 当控制节点报错最大加速度错误时，你可能需要更改最大加速度限制。目前将关节1-4的最大加速度改为原值的5/9
 joint_limits:
   $(arg prefix)joint_1:
     has_velocity_limits: true
     max_velocity: 0.48
     has_acceleration_limits: true
-    max_acceleration: 0.86
+    max_acceleration: 0.5 #0.86
   $(arg prefix)joint_2:
     has_velocity_limits: true
     max_velocity: 0.48
     has_acceleration_limits: true
-    max_acceleration: 0.43
+    max_acceleration: 0.25 #0.43
   $(arg prefix)joint_3:
     has_velocity_limits: true
     max_velocity: 0.48
     has_acceleration_limits: true
-    max_acceleration: 0.34
+    max_acceleration: 0.2 #0.34
   $(arg prefix)joint_4:
     has_velocity_limits: true
     max_velocity: 0.76
     has_acceleration_limits: true
-    max_acceleration: 0.86
+    max_acceleration: 0.5 #0.86
   $(arg prefix)joint_5:
     has_velocity_limits: true
     max_velocity: 0.76
     has_acceleration_limits: true
-    max_acceleration: 8.6
+    max_acceleration: 8.6 #8.6
   $(arg prefix)joint_6:
     has_velocity_limits: true
     max_velocity: 1.52
     has_acceleration_limits: true
-    max_acceleration: 8.6
+    max_acceleration: 8.6 #8.6
   right_finger_bottom_joint:
     has_velocity_limits: true
     max_velocity: 1000

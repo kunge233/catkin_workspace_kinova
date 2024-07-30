@@ -25,7 +25,7 @@ void openGripper(trajectory_msgs::JointTrajectory& posture)
 
     posture.points.resize(1);
     posture.points[0].positions.resize(1);
-    posture.points[0].positions[0] = 0.96;
+    posture.points[0].positions[0] = 0.95; // must < 0.96
     posture.points[0].time_from_start = ros::Duration(0.5);
 }
 
@@ -38,7 +38,7 @@ void closedGripper(trajectory_msgs::JointTrajectory& posture)
 
     posture.points.resize(1);
     posture.points[0].positions.resize(1);
-    posture.points[0].positions[0] = -0.09;
+    posture.points[0].positions[0] = 0.0; //-0.09;
     posture.points[0].time_from_start = ros::Duration(0.5);
 }
 
@@ -202,12 +202,12 @@ int main(int argc, char** argv)
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
     moveit::planning_interface::MoveGroupInterface arm_group("arm");
     moveit::planning_interface::MoveGroupInterface gripper_group("gripper");
-    arm_group.setPlanningTime(45.0);
+
+    arm_group.setPlannerId("RRTConnectkConfigDefault");//规划算法
+    arm_group.setPlanningTime(10.0);
+    arm_group.setNumPlanningAttempts(10);
 
     addCollisionObjects(planning_scene_interface);
-
-    // 创建 JointTrajectory 对象
-    trajectory_msgs::JointTrajectory gripper_posture;
 
     pick(arm_group);
 

@@ -66,7 +66,7 @@
     </group_state>
     <!-- END EFFECTOR: Purpose: Represent information about an end effector. -->
     <!-- <end_effector name="end_effector" parent_link="$(arg prefix)tool_frame" group="arm" /> -->
-    <!--END EFFECTOR: Purpose: Represent information about an end effector.-->
+    <!--END EFFECTOR: Purpose: Represent information about an end effector.为end effector加上了父组-->
     <end_effector name="end_effector" parent_link="$(arg prefix)tool_frame" group="gripper" parent_group="arm" />
 
     <!--PASSIVE JOINT: Purpose: this element is used to mark joints that are not actuated-->
