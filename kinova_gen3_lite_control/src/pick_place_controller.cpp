@@ -9,6 +9,10 @@
 #include <tf2/LinearMath/Transform.h>
 #include <geometric_shapes/shapes.h>
 #include <cmath>
+#include <kinova_gen3_lite_control/AddRemoveCollisionObject.h>
+#include <geometry_msgs/Pose.h>
+#include <moveit_msgs/CollisionObject.h>
+#include <kinova_gen3_lite_control/PrintCollisionObjects.h>
 
 // The circle constant tau = 2*pi. One tau is one rotation in radians.
 const double tau = 2 * M_PI;
@@ -329,14 +333,105 @@ void addCollisionObjects(moveit::planning_interface::PlanningSceneInterface& pla
     planning_scene_interface.applyCollisionObjects(collision_objects);
 }
 
+// 回调函数：添加或删除碰撞物体
+bool addRemoveCollisionObjectCallback(kinova_gen3_lite_control::AddRemoveCollisionObject::Request& req,
+                                      kinova_gen3_lite_control::AddRemoveCollisionObject::Response& res)
+{
+    moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+
+    // 创建碰撞物体消息
+    moveit_msgs::CollisionObject collision_object;
+    collision_object.id = req.object_id;
+    collision_object.header.frame_id = "base_link";
+    
+    if (req.action == "add") {
+        collision_object.primitives.resize(1);
+        collision_object.primitives[0].type = collision_object.primitives[0].BOX;
+        collision_object.primitives[0].dimensions = req.dimensions;
+        collision_object.primitive_poses.resize(1);
+        collision_object.primitive_poses[0] = req.pose;
+        collision_object.operation = collision_object.ADD;
+
+        // 应用碰撞物体到规划场景
+        planning_scene_interface.applyCollisionObjects({collision_object});
+        res.success = true;
+        res.message = "Collision object added successfully.";
+    } 
+    else if (req.action == "remove") {
+        collision_object.operation = collision_object.REMOVE;
+        planning_scene_interface.applyCollisionObjects({collision_object});
+        res.success = true;
+        res.message = "Collision object removed successfully.";
+    } 
+    else {
+        res.success = false;
+        res.message = "Invalid action. Use 'add' or 'remove'.";
+    }
+
+    ROS_INFO("%s", res.message.c_str());
+    return true;
+}
+
+// 回调函数：打印当前规划场景中的所有碰撞物体
+bool printCollisionObjectsCallback(kinova_gen3_lite_control::PrintCollisionObjects::Request& req,
+                                   kinova_gen3_lite_control::PrintCollisionObjects::Response& res)
+{
+    ros::NodeHandle nh;
+    ros::ServiceClient planning_scene_client = nh.serviceClient<moveit_msgs::GetPlanningScene>("get_planning_scene");
+    moveit_msgs::GetPlanningScene srv;
+    srv.request.components.components = moveit_msgs::PlanningSceneComponents::WORLD_OBJECT_NAMES |
+                                        moveit_msgs::PlanningSceneComponents::WORLD_OBJECT_GEOMETRY;
+
+    if (planning_scene_client.call(srv)) {
+        const auto& objects = srv.response.scene.world.collision_objects;
+        res.object_ids.resize(objects.size());
+        res.poses.resize(objects.size());
+        res.dimension_counts.resize(objects.size());
+
+        // 计算总维度大小
+        size_t total_dimensions = 0;
+        for (const auto& obj : objects) {
+            if (!obj.primitives.empty()) {
+                res.dimension_counts.push_back(obj.primitives[0].dimensions.size());
+                total_dimensions += obj.primitives[0].dimensions.size();
+            } else {
+                res.dimension_counts.push_back(0);
+            }
+        }
+
+        res.dimensions.resize(total_dimensions);
+
+        size_t idx = 0;
+        for (size_t i = 0; i < objects.size(); ++i) {
+            res.object_ids[i] = objects[i].id;
+            res.poses[i] = objects[i].pose;
+
+            if (!objects[i].primitives.empty()) {
+                const auto& dims = objects[i].primitives[0].dimensions;
+                for (double dim : dims) {
+                    res.dimensions[idx++] = dim;
+                }
+            }
+        }
+
+        ROS_INFO("Retrieved %zu collision objects from the planning scene.", objects.size());
+        return true;
+    } else {
+        res.object_ids.clear();
+        res.poses.clear();
+        res.dimensions.clear();
+        res.dimension_counts.clear();
+        ROS_ERROR("Failed to call service get_planning_scene");
+        return false;
+    }
+}
+
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "pick_place_controller");
     ros::NodeHandle nh;
-    ros::AsyncSpinner spinner(1);
-    spinner.start();
 
-    ros::WallDuration(1.0).sleep();
+    ros::WallDuration(1.0).sleep(); // 等待 1 秒，确保所有节点都已初始化
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
     moveit::planning_interface::MoveGroupInterface arm_group("arm");
     moveit::planning_interface::MoveGroupInterface gripper_group("gripper");
@@ -347,10 +442,19 @@ int main(int argc, char** argv)
 
     addCollisionObjects(planning_scene_interface, nh);
 
-    pick(arm_group, nh);
+    // pick(arm_group, nh);
 
-    place(arm_group, nh);
+    // place(arm_group, nh);
 
-    ros::waitForShutdown();
+    // 注册服务
+    ros::ServiceServer add_remove_collision_object_service = nh.advertiseService(
+        "add_remove_collision_object", addRemoveCollisionObjectCallback);
+    ROS_INFO("Add/Remove Collision Object service ready.");
+
+    ros::ServiceServer print_collision_objects_service = nh.advertiseService(
+        "print_collision_objects", printCollisionObjectsCallback);
+    ROS_INFO("Print Collision Objects service ready.");
+
+    ros::spin();
     return 0;
 }

@@ -44,6 +44,8 @@ add_service_files(
   ActionTrigger.srv
   NamedPose.srv
   GetPose.srv
+  AddRemoveCollisionObject.srv
+  PrintCollisionObjects.srv
 )
 
 ## Generate added messages and services with any dependencies listed here
@@ -51,6 +53,7 @@ generate_messages(
   DEPENDENCIES
   std_msgs
   geometry_msgs
+  moveit_msgs
 )
 
 ## The catkin_package macro generates cmake config files for your package
@@ -62,12 +65,14 @@ catkin_package(
     rospy 
     std_msgs 
     geometry_msgs 
+    moveit_msgs
     kortex_driver 
     moveit_core
     moveit_visual_tools
     moveit_ros_planning_interface
     interactive_markers
     tf2_geometry_msgs
+    message_runtime
   DEPENDS
     EIGEN3
 )

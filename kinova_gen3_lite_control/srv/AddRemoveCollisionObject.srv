@@ -1,0 +1,10 @@
+# 请求部分
+string action          # "add" 或 "remove"
+string object_id       # 物体的ID
+geometry_msgs/Pose pose # 物体的位置和姿态
+float64[] dimensions    # 物体的尺寸（长、宽、高）
+
+---
+# 响应部分
+bool success           # 是否成功
+string message         # 成功或失败的消息

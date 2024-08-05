@@ -1,0 +1,7 @@
+# 请求部分为空
+---
+# 响应部分
+string[] object_ids    # 碰撞物体的ID列表
+geometry_msgs/Pose[] poses   # 每个物体的位置和姿态
+float64[] dimensions   # 所有物体的尺寸（按顺序排列）
+int32[] dimension_counts  # 每个物体的尺寸数量（与 dimensions 数组对应）
