@@ -1,5 +1,6 @@
 #include <cmath>
 #include <memory>
+#include <algorithm>
 #include <ros/ros.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/move_group_interface/move_group_interface.h>
@@ -18,6 +19,9 @@
 #include <kinova_gen3_lite_control/AddRemoveCollisionObject.h>
 #include <kinova_gen3_lite_control/PrintCollisionObjects.h>
 #include <kinova_gen3_lite_control/MoveArmToPose.h>
+#include <kinova_gen3_lite_control/Pick.h>
+#include <kinova_gen3_lite_control/Place.h>
+#include <kinova_gen3_lite_control/DetachAndRemoveObject.h>
 
 // The circle constant tau = 2*pi. One tau is one rotation in radians.
 const double tau = 2 * M_PI;
@@ -25,10 +29,11 @@ const double tau = 2 * M_PI;
 // 全局变量声明
 std::unique_ptr<moveit::planning_interface::MoveGroupInterface> arm_group;
 std::unique_ptr<moveit::planning_interface::MoveGroupInterface> gripper_group;
+std::unique_ptr<moveit::planning_interface::PlanningSceneInterface> planning_scene_interface;
 
 // 函数声明
 void openGripper(trajectory_msgs::JointTrajectory& posture);
-void closedGripper(trajectory_msgs::JointTrajectory& posture);
+void closedGripper(trajectory_msgs::JointTrajectory& posture, double position);
 void getObjectInfo(ros::NodeHandle& node_handle, const std::string& object_id, 
                    geometry_msgs::Pose& object_pose, std::vector<double>& object_dimensions);
 tf2::Vector3 calculateDirectionVector(const geometry_msgs::Pose& start_pose, const geometry_msgs::Pose& end_pose);
@@ -42,7 +47,13 @@ void pick(moveit::planning_interface::MoveGroupInterface& move_group,
           ros::NodeHandle& node_handle);
 void place(moveit::planning_interface::MoveGroupInterface& move_group,
            ros::NodeHandle& node_handle);
-void addCollisionObjects(moveit::planning_interface::PlanningSceneInterface& planning_scene_interface, 
+bool pickCallback(kinova_gen3_lite_control::Pick::Request &req,
+                  kinova_gen3_lite_control::Pick::Response &res);
+bool placeCallback(kinova_gen3_lite_control::Place::Request &req,
+                   kinova_gen3_lite_control::Place::Response &res);
+bool detachAndRemoveObjectCallback(kinova_gen3_lite_control::DetachAndRemoveObject::Request &req,
+                                   kinova_gen3_lite_control::DetachAndRemoveObject::Response &res);
+void addCollisionObjects(std::unique_ptr<moveit::planning_interface::PlanningSceneInterface>& planning_scene_interface, 
                          ros::NodeHandle& node_handle);
 bool addRemoveCollisionObjectCallback(kinova_gen3_lite_control::AddRemoveCollisionObject::Request& req,
                                       kinova_gen3_lite_control::AddRemoveCollisionObject::Response& res);
@@ -59,11 +70,10 @@ int main(int argc, char** argv)
     spinner.start();
 
     ros::WallDuration(1.0).sleep();
-    moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
-
     // 初始化全局变量
     arm_group = std::unique_ptr<moveit::planning_interface::MoveGroupInterface>(new moveit::planning_interface::MoveGroupInterface("arm"));
     gripper_group = std::unique_ptr<moveit::planning_interface::MoveGroupInterface>(new moveit::planning_interface::MoveGroupInterface("gripper"));
+    planning_scene_interface = std::unique_ptr<moveit::planning_interface::PlanningSceneInterface>(new moveit::planning_interface::PlanningSceneInterface());
 
     arm_group->setPlannerId("RRTConnectkConfigDefault");
     arm_group->setPlanningTime(10.0);
@@ -82,11 +92,20 @@ int main(int argc, char** argv)
         "move_arm_to_pose", moveArmToPoseCallback);
     ROS_INFO("Move Arm To Pose service ready.");
 
+    ros::ServiceServer pick_service = nh.advertiseService("pick", pickCallback);
+    ROS_INFO("Pick service ready.");
+
+    ros::ServiceServer place_service = nh.advertiseService("place", placeCallback);
+    ROS_INFO("Place service ready.");
+
+    ros::ServiceServer detach_remove_service = nh.advertiseService("detach_and_remove_object", detachAndRemoveObjectCallback);
+    ROS_INFO("Detach and Remove Object service ready.");
+
     addCollisionObjects(planning_scene_interface, nh);
 
-    pick(*arm_group, nh);
+    // pick(*arm_group, nh);
 
-    place(*arm_group, nh);
+    // place(*arm_group, nh);
 
     ros::waitForShutdown();
     return 0;
@@ -103,14 +122,14 @@ void openGripper(trajectory_msgs::JointTrajectory& posture)
     posture.points[0].time_from_start = ros::Duration(0.5);
 }
 
-void closedGripper(trajectory_msgs::JointTrajectory& posture)
+void closedGripper(trajectory_msgs::JointTrajectory& posture, double position)
 {
     posture.joint_names.resize(1);
     posture.joint_names[0] = "right_finger_bottom_joint";
 
     posture.points.resize(1);
     posture.points[0].positions.resize(1);
-    posture.points[0].positions[0] = 0.2; //-0.09;
+    posture.points[0].positions[0] = position;
     posture.points[0].time_from_start = ros::Duration(0.5);
 }
 
@@ -267,7 +286,8 @@ void pick(moveit::planning_interface::MoveGroupInterface& move_group,
     openGripper(grasps[0].pre_grasp_posture);
 
     // 设置抓取时的夹爪姿态
-    closedGripper(grasps[0].grasp_posture);
+    double gripper_position = std::max(object_dimensions[0] * 5 - 0.06, 0.0);
+    closedGripper(grasps[0].grasp_posture, gripper_position);
 
     // 设置支持面为 table1
     move_group.setSupportSurfaceName("table1");
@@ -349,7 +369,60 @@ void place(moveit::planning_interface::MoveGroupInterface& move_group,
     ROS_INFO("Place Finished.^-^");
 }
 
-void addCollisionObjects(moveit::planning_interface::PlanningSceneInterface& planning_scene_interface, 
+bool pickCallback(kinova_gen3_lite_control::Pick::Request &req,
+                  kinova_gen3_lite_control::Pick::Response &res)
+{
+    ros::NodeHandle nh;
+    try {
+        pick(*arm_group, nh);
+        res.success = true;
+        res.message = "Pick operation successful.";
+    } catch (const std::exception &e) {
+        res.success = false;
+        res.message = e.what();
+    }
+    return true;
+}
+
+bool placeCallback(kinova_gen3_lite_control::Place::Request &req,
+                   kinova_gen3_lite_control::Place::Response &res)
+{
+    ros::NodeHandle nh;
+    try {
+        place(*arm_group, nh);
+        res.success = true;
+        res.message = "Place operation successful.";
+    } catch (const std::exception &e) {
+        res.success = false;
+        res.message = e.what();
+    }
+    return true;
+}
+
+bool detachAndRemoveObjectCallback(kinova_gen3_lite_control::DetachAndRemoveObject::Request &req,
+                                   kinova_gen3_lite_control::DetachAndRemoveObject::Response &res)
+{
+    try {
+        // Detach the object from the robot
+        arm_group->detachObject(req.object_id);
+        ROS_INFO("Detached object: %s", req.object_id.c_str());
+
+        // Remove the object from the planning scene
+        std::vector<std::string> object_ids;
+        object_ids.push_back(req.object_id);
+        planning_scene_interface->removeCollisionObjects(object_ids);
+        ROS_INFO("Removed object: %s", req.object_id.c_str());
+
+        res.success = true;
+        res.message = "Object detached and removed successfully.";
+    } catch (const std::exception &e) {
+        res.success = false;
+        res.message = e.what();
+    }
+    return true;
+}
+
+void addCollisionObjects(std::unique_ptr<moveit::planning_interface::PlanningSceneInterface>& planning_scene_interface, 
                          ros::NodeHandle& node_handle)
 {
     // 创建环境
@@ -405,15 +478,13 @@ void addCollisionObjects(moveit::planning_interface::PlanningSceneInterface& pla
     collision_objects[2].operation = collision_objects[2].ADD;
 
     // 应用到规划场景
-    planning_scene_interface.applyCollisionObjects(collision_objects);
+    planning_scene_interface->applyCollisionObjects(collision_objects);
 }
 
 // 回调函数：添加或删除碰撞物体
 bool addRemoveCollisionObjectCallback(kinova_gen3_lite_control::AddRemoveCollisionObject::Request& req,
                                       kinova_gen3_lite_control::AddRemoveCollisionObject::Response& res)
 {
-    moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
-
     // 创建碰撞物体消息
     moveit_msgs::CollisionObject collision_object;
     collision_object.id = req.object_id;
@@ -428,13 +499,13 @@ bool addRemoveCollisionObjectCallback(kinova_gen3_lite_control::AddRemoveCollisi
         collision_object.operation = collision_object.ADD;
 
         // 应用碰撞物体到规划场景
-        planning_scene_interface.applyCollisionObjects({collision_object});
+        planning_scene_interface->applyCollisionObjects({collision_object});
         res.success = true;
         res.message = "Collision object added successfully.";
     } 
     else if (req.action == "remove") {
         collision_object.operation = collision_object.REMOVE;
-        planning_scene_interface.applyCollisionObjects({collision_object});
+        planning_scene_interface->applyCollisionObjects({collision_object});
         res.success = true;
         res.message = "Collision object removed successfully.";
     } 

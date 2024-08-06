@@ -47,6 +47,9 @@ add_service_files(
   AddRemoveCollisionObject.srv
   PrintCollisionObjects.srv
   MoveArmToPose.srv
+  Pick.srv
+  Place.srv
+  DetachAndRemoveObject.srv
 )
 
 ## Generate added messages and services with any dependencies listed here
