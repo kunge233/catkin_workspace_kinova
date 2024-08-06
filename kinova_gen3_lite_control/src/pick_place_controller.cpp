@@ -430,8 +430,10 @@ int main(int argc, char** argv)
 {
     ros::init(argc, argv, "pick_place_controller");
     ros::NodeHandle nh;
+    ros::AsyncSpinner spinner(1);
+    spinner.start();
 
-    ros::WallDuration(1.0).sleep(); // 等待 1 秒，确保所有节点都已初始化
+    ros::WallDuration(1.0).sleep();
     moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
     moveit::planning_interface::MoveGroupInterface arm_group("arm");
     moveit::planning_interface::MoveGroupInterface gripper_group("gripper");
@@ -439,12 +441,6 @@ int main(int argc, char** argv)
     arm_group.setPlannerId("RRTConnectkConfigDefault"); // 规划算法
     arm_group.setPlanningTime(10.0);
     arm_group.setNumPlanningAttempts(10);
-
-    addCollisionObjects(planning_scene_interface, nh);
-
-    // pick(arm_group, nh);
-
-    // place(arm_group, nh);
 
     // 注册服务
     ros::ServiceServer add_remove_collision_object_service = nh.advertiseService(
@@ -455,6 +451,12 @@ int main(int argc, char** argv)
         "print_collision_objects", printCollisionObjectsCallback);
     ROS_INFO("Print Collision Objects service ready.");
 
-    ros::spin();
+    addCollisionObjects(planning_scene_interface, nh);
+
+    pick(arm_group, nh);
+
+    place(arm_group, nh);
+
+    ros::waitForShutdown();
     return 0;
 }

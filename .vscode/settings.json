@@ -86,6 +86,7 @@
         "bit": "cpp",
         "*.ipp": "cpp",
         "slist": "cpp",
-        "valarray": "cpp"
+        "valarray": "cpp",
+        "*.inc": "cpp"
     }
 }

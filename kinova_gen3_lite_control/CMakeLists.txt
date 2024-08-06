@@ -46,6 +46,7 @@ add_service_files(
   GetPose.srv
   AddRemoveCollisionObject.srv
   PrintCollisionObjects.srv
+  MoveArmToPose.srv
 )
 
 ## Generate added messages and services with any dependencies listed here
