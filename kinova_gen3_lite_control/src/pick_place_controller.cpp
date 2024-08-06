@@ -1,21 +1,96 @@
+#include <cmath>
+#include <memory>
 #include <ros/ros.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 #include <moveit/robot_state/robot_state.h>
 #include <moveit_msgs/GetPlanningScene.h>
+#include <moveit_msgs/CollisionObject.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2/LinearMath/Vector3.h>
 #include <tf2/LinearMath/Transform.h>
 #include <geometric_shapes/shapes.h>
-#include <cmath>
-#include <kinova_gen3_lite_control/AddRemoveCollisionObject.h>
 #include <geometry_msgs/Pose.h>
-#include <moveit_msgs/CollisionObject.h>
+#include <geometry_msgs/Point.h>
+#include <geometry_msgs/Quaternion.h>
+#include <trajectory_msgs/JointTrajectory.h>
+#include <kinova_gen3_lite_control/AddRemoveCollisionObject.h>
 #include <kinova_gen3_lite_control/PrintCollisionObjects.h>
+#include <kinova_gen3_lite_control/MoveArmToPose.h>
 
 // The circle constant tau = 2*pi. One tau is one rotation in radians.
 const double tau = 2 * M_PI;
+
+// 全局变量声明
+std::unique_ptr<moveit::planning_interface::MoveGroupInterface> arm_group;
+std::unique_ptr<moveit::planning_interface::MoveGroupInterface> gripper_group;
+
+// 函数声明
+void openGripper(trajectory_msgs::JointTrajectory& posture);
+void closedGripper(trajectory_msgs::JointTrajectory& posture);
+void getObjectInfo(ros::NodeHandle& node_handle, const std::string& object_id, 
+                   geometry_msgs::Pose& object_pose, std::vector<double>& object_dimensions);
+tf2::Vector3 calculateDirectionVector(const geometry_msgs::Pose& start_pose, const geometry_msgs::Pose& end_pose);
+double calculateCustomYawFromDirection(const tf2::Vector3& direction);
+tf2::Quaternion calculateOrientation(double yaw);
+tf2::Quaternion getRelativeOrientation(const tf2::Quaternion& current_orientation,
+                                      const tf2::Quaternion& target_orientation);
+void getRelativeEulerAngles(const tf2::Quaternion& relative_orientation,
+                            double& roll, double& pitch, double& yaw);
+void pick(moveit::planning_interface::MoveGroupInterface& move_group, 
+          ros::NodeHandle& node_handle);
+void place(moveit::planning_interface::MoveGroupInterface& move_group,
+           ros::NodeHandle& node_handle);
+void addCollisionObjects(moveit::planning_interface::PlanningSceneInterface& planning_scene_interface, 
+                         ros::NodeHandle& node_handle);
+bool addRemoveCollisionObjectCallback(kinova_gen3_lite_control::AddRemoveCollisionObject::Request& req,
+                                      kinova_gen3_lite_control::AddRemoveCollisionObject::Response& res);
+bool printCollisionObjectsCallback(kinova_gen3_lite_control::PrintCollisionObjects::Request& req,
+                                   kinova_gen3_lite_control::PrintCollisionObjects::Response& res);
+bool moveArmToPoseCallback(kinova_gen3_lite_control::MoveArmToPose::Request &req,
+                           kinova_gen3_lite_control::MoveArmToPose::Response &res);
+
+int main(int argc, char** argv)
+{
+    ros::init(argc, argv, "pick_place_controller");
+    ros::NodeHandle nh;
+    ros::AsyncSpinner spinner(4);
+    spinner.start();
+
+    ros::WallDuration(1.0).sleep();
+    moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+
+    // 初始化全局变量
+    arm_group = std::unique_ptr<moveit::planning_interface::MoveGroupInterface>(new moveit::planning_interface::MoveGroupInterface("arm"));
+    gripper_group = std::unique_ptr<moveit::planning_interface::MoveGroupInterface>(new moveit::planning_interface::MoveGroupInterface("gripper"));
+
+    arm_group->setPlannerId("RRTConnectkConfigDefault");
+    arm_group->setPlanningTime(10.0);
+    arm_group->setNumPlanningAttempts(10);
+
+    // 注册服务
+    ros::ServiceServer add_remove_collision_object_service = nh.advertiseService(
+        "add_remove_collision_object", addRemoveCollisionObjectCallback);
+    ROS_INFO("Add/Remove Collision Object service ready.");
+
+    ros::ServiceServer print_collision_objects_service = nh.advertiseService(
+        "print_collision_objects", printCollisionObjectsCallback);
+    ROS_INFO("Print Collision Objects service ready.");
+
+    ros::ServiceServer move_arm_to_pose_service = nh.advertiseService(
+        "move_arm_to_pose", moveArmToPoseCallback);
+    ROS_INFO("Move Arm To Pose service ready.");
+
+    addCollisionObjects(planning_scene_interface, nh);
+
+    pick(*arm_group, nh);
+
+    place(*arm_group, nh);
+
+    ros::waitForShutdown();
+    return 0;
+}
 
 void openGripper(trajectory_msgs::JointTrajectory& posture)
 {
@@ -426,37 +501,49 @@ bool printCollisionObjectsCallback(kinova_gen3_lite_control::PrintCollisionObjec
     }
 }
 
-int main(int argc, char** argv)
+bool moveArmToPoseCallback(kinova_gen3_lite_control::MoveArmToPose::Request &req,
+                           kinova_gen3_lite_control::MoveArmToPose::Response &res)
 {
-    ros::init(argc, argv, "pick_place_controller");
-    ros::NodeHandle nh;
-    ros::AsyncSpinner spinner(1);
-    spinner.start();
+    // 获取当前的位置
+    geometry_msgs::Pose current_pose = arm_group->getCurrentPose().pose;
 
-    ros::WallDuration(1.0).sleep();
-    moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
-    moveit::planning_interface::MoveGroupInterface arm_group("arm");
-    moveit::planning_interface::MoveGroupInterface gripper_group("gripper");
+    // 计算目标朝向
+    geometry_msgs::Quaternion target_orientation;
+    if (req.orientation.x == 0.0 && req.orientation.y == 0.0 && req.orientation.z == 0.0 && req.orientation.w == 0.0) {
+        // 如果 orientation 为空（即四个分量都是 0），计算默认朝向,in XOY
+        geometry_msgs::Pose origin_pose, req_pose;
+        origin_pose.position.x = 0.0;
+        origin_pose.position.y = 0.0;
+        origin_pose.position.z = 0.0;
+        req_pose.position = req.position;
+        tf2::Vector3 target_direction = calculateDirectionVector(origin_pose, req_pose);
+        double yaw = calculateCustomYawFromDirection(target_direction);
+        tf2::Quaternion tf_target_orientation = calculateOrientation(yaw);
+        target_orientation = tf2::toMsg(tf_target_orientation);
+    } else {
+        // 使用提供的朝向，将 geometry_msgs::Quaternion 转换为 tf2::Quaternion
+        tf2::Quaternion tf_req_orientation;
+        tf2::fromMsg(req.orientation, tf_req_orientation);
+        target_orientation = req.orientation; 
+    }
 
-    arm_group.setPlannerId("RRTConnectkConfigDefault"); // 规划算法
-    arm_group.setPlanningTime(10.0);
-    arm_group.setNumPlanningAttempts(10);
+    geometry_msgs::Pose target_pose = current_pose;
+    target_pose.position = req.position;
+    target_pose.orientation = target_orientation;
+    arm_group->setPoseTarget(target_pose);
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
 
-    // 注册服务
-    ros::ServiceServer add_remove_collision_object_service = nh.advertiseService(
-        "add_remove_collision_object", addRemoveCollisionObjectCallback);
-    ROS_INFO("Add/Remove Collision Object service ready.");
+    bool success = (arm_group->plan(plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+    if (success) {
+        arm_group->move();
+        res.success = true;
+        res.message = "Arm moved to target pose successfully.";
+        ROS_INFO("Arm moved to target pose successfully.");
+    } else {
+        res.success = false;
+        res.message = "Failed to move arm to target pose.";
+        ROS_INFO("Failed to move the arm to target pose.");
+    }
 
-    ros::ServiceServer print_collision_objects_service = nh.advertiseService(
-        "print_collision_objects", printCollisionObjectsCallback);
-    ROS_INFO("Print Collision Objects service ready.");
-
-    addCollisionObjects(planning_scene_interface, nh);
-
-    pick(arm_group, nh);
-
-    place(arm_group, nh);
-
-    ros::waitForShutdown();
-    return 0;
+    return true;
 }
