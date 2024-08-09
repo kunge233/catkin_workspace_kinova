@@ -164,6 +164,25 @@ void closedGripper(trajectory_msgs::JointTrajectory& posture, double position)
 void getObjectInfo(ros::NodeHandle& node_handle, const std::string& object_id, 
                    geometry_msgs::Pose& object_pose, std::vector<double>& object_dimensions)
 {
+    // 使用PlanningSceneInterface获取附着物体
+    moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+
+    // 先检查附着的物体
+    auto attached_objects = planning_scene_interface.getAttachedObjects({object_id});
+    if (!attached_objects.empty()) {
+        const auto& attached_object = attached_objects[object_id];
+        object_pose = attached_object.object.pose;
+        if (!attached_object.object.primitives.empty()) {
+            object_dimensions = attached_object.object.primitives[0].dimensions;
+            ROS_INFO("Attached object %s found on the robot.", object_id.c_str());
+            return;
+        } else {
+            ROS_ERROR("Attached object %s has no primitives!", object_id.c_str());
+            return;
+        }
+    }
+
+    // 如果附着物体未找到，则尝试在场景中查找
     ros::ServiceClient planning_scene_client = node_handle.serviceClient<moveit_msgs::GetPlanningScene>("get_planning_scene");
     moveit_msgs::GetPlanningScene srv;
     srv.request.components.components = moveit_msgs::PlanningSceneComponents::WORLD_OBJECT_NAMES |
@@ -258,7 +277,10 @@ void getRelativeEulerAngles(const tf2::Quaternion& relative_orientation,
 }
 
 void pick(moveit::planning_interface::MoveGroupInterface& move_group, 
-          ros::NodeHandle& node_handle)
+          ros::NodeHandle& node_handle,
+          const std::string& object_name,
+          const std::string& support_surface_name,
+          double input_gripper_position)
 {
     std::vector<moveit_msgs::Grasp> grasps;
     grasps.resize(1);
@@ -271,7 +293,11 @@ void pick(moveit::planning_interface::MoveGroupInterface& move_group,
     origin_pose.position.z = 0.0;
 
     // 使用GetPlanningScene服务获取最新场景信息
-    getObjectInfo(node_handle, "object", object_pose, object_dimensions);
+    getObjectInfo(node_handle, object_name, object_pose, object_dimensions);
+
+    if (object_dimensions.empty()) {
+        throw std::runtime_error("Failed to get object dimensions.");
+    }
 
     // 当前姿态的四元数（假设为初始姿态）
     tf2::Quaternion current_orientation;
@@ -313,46 +339,58 @@ void pick(moveit::planning_interface::MoveGroupInterface& move_group,
     // 设置抓取前的夹爪姿态
     openGripper(grasps[0].pre_grasp_posture);
 
+    // 计算或使用传入的夹爪位置
+    double gripper_position = std::max(object_dimensions[0] * 5 - 0.06, 0.0);  // 默认计算值
+    if (input_gripper_position >= 0.0 && input_gripper_position <= 1.0) {
+        gripper_position = input_gripper_position * 0.95;  // 将0~1映射到0~0.95
+    }
+
     // 设置抓取时的夹爪姿态
-    double gripper_position = std::max(object_dimensions[0] * 5 - 0.06, 0.0);
     closedGripper(grasps[0].grasp_posture, gripper_position);
 
-    // 设置支持面为 table1
-    move_group.setSupportSurfaceName("table1");
+    // 设置支持面为传入的值
+    move_group.setSupportSurfaceName(support_surface_name);
 
     // 调用 pick 函数执行抓取
-    ROS_INFO("Picking............");
-    move_group.pick("object", grasps);
+    ROS_INFO("Picking object: %s on surface: %s with gripper position: %f", object_name.c_str(), support_surface_name.c_str(), gripper_position);
+    move_group.pick(object_name, grasps);
     ROS_INFO("Pick Finished.^-^");
 }
 
 void place(moveit::planning_interface::MoveGroupInterface& move_group,
-           ros::NodeHandle& node_handle)
+           ros::NodeHandle& node_handle,
+           const std::string& object_name,
+           const std::string& support_surface_name)
 {
     std::vector<moveit_msgs::PlaceLocation> place_location;
     place_location.resize(1);
 
-    geometry_msgs::Pose object_pose, origin_pose;
-    std::vector<double> object_dimensions;
+    geometry_msgs::Pose object_pose, target_pose, origin_pose;
+    std::vector<double> object_dimensions, support_surface_dimensions;
 
     origin_pose.position.x = 0.0;
     origin_pose.position.y = 0.0;
     origin_pose.position.z = 0.0;
 
-    // 使用GetPlanningScene服务获取最新场景信息
-    getObjectInfo(node_handle, "table2", object_pose, object_dimensions);
+    // 使用GetPlanningScene服务获取支持面的信息
+    getObjectInfo(node_handle, support_surface_name, target_pose, support_surface_dimensions);
+    if (support_surface_dimensions.empty()) {
+        throw std::runtime_error("Failed to get support surface dimensions.");
+    }
+
+    // 使用GetPlanningScene服务获取物体的信息
+    getObjectInfo(node_handle, object_name, object_pose, object_dimensions);
+    if (object_dimensions.empty()) {
+        throw std::runtime_error("Failed to get object dimensions.");
+    }
 
     // 获取当前机械臂的姿态
     geometry_msgs::Pose current_pose = move_group.getCurrentPose().pose;
     tf2::Quaternion current_orientation;
     tf2::fromMsg(current_pose.orientation, current_orientation);
-    // 打印姿态的四元数
-    // ROS_INFO("current Quaternion: [x: %f, y: %f, z: %f, w: %f]",
-    //         current_orientation.x(), current_orientation.y(),
-    //         current_orientation.z(), current_orientation.w());
 
     // 计算接近方向
-    tf2::Vector3 approach_direction = calculateDirectionVector(origin_pose, object_pose);
+    tf2::Vector3 approach_direction = calculateDirectionVector(origin_pose, target_pose);
     double yaw = calculateCustomYawFromDirection(approach_direction);
     tf2::Quaternion place_orientation = calculateOrientation(yaw);
 
@@ -366,8 +404,8 @@ void place(moveit::planning_interface::MoveGroupInterface& move_group,
     // 设置放置位置的姿态
     place_location[0].place_pose.header.frame_id = "base_link";
     place_location[0].place_pose.pose.orientation = tf2::toMsg(relative_orientation);
-    place_location[0].place_pose.pose.position = object_pose.position;
-    place_location[0].place_pose.pose.position.z += object_dimensions[2] / 2 + 0.08;
+    place_location[0].place_pose.pose.position = target_pose.position;
+    place_location[0].place_pose.pose.position.z += support_surface_dimensions[2] / 2 + object_dimensions[2] / 2;
 
     // 设置放置前的接近姿态（z轴负方向）
     place_location[0].pre_place_approach.direction.header.frame_id = "base_link";
@@ -389,11 +427,12 @@ void place(moveit::planning_interface::MoveGroupInterface& move_group,
     // 设置放置后的夹爪姿态为打开
     openGripper(place_location[0].post_place_posture);
 
-    // 设置支撑表面为table2
-    move_group.setSupportSurfaceName("table2");
+    // 设置支持面为传入的值
+    move_group.setSupportSurfaceName(support_surface_name);
+
     // 调用 place 函数将对象放置到指定的位置
-    ROS_INFO("Placing............");
-    move_group.place("object", place_location);
+    ROS_INFO("Placing object: %s on surface: %s", object_name.c_str(), support_surface_name.c_str());
+    move_group.place(object_name, place_location);
     ROS_INFO("Place Finished.^-^");
 }
 
@@ -401,8 +440,23 @@ bool pickCallback(kinova_gen3_lite_control::Pick::Request &req,
                   kinova_gen3_lite_control::Pick::Response &res)
 {
     ros::NodeHandle nh;
+
+    // 检查物体是否存在于场景中
+    auto world_objects = planning_scene_interface->getObjects({req.object_name});
+    if (world_objects.find(req.object_name) == world_objects.end()) {
+        res.success = false;
+        res.message = "Object " + req.object_name + " does not exist in the planning scene.";
+        ROS_WARN("%s", res.message.c_str());
+        return true;  // 返回true以避免节点崩溃
+    }
+
     try {
-        pick(*arm_group, nh);
+        // 获取传入的物体名称和支持面名称
+        std::string object_name = req.object_name;
+        std::string support_surface_name = req.support_surface_name;
+
+        // 传递输入的 gripper_position 值（0~1），-1表示使用默认计算值
+        pick(*arm_group, nh, object_name, support_surface_name, req.gripper_position);
         res.success = true;
         res.message = "Pick operation successful.";
     } catch (const std::exception &e) {
@@ -416,8 +470,38 @@ bool placeCallback(kinova_gen3_lite_control::Place::Request &req,
                    kinova_gen3_lite_control::Place::Response &res)
 {
     ros::NodeHandle nh;
+
+    if (!planning_scene_interface) {
+        res.success = false;
+        res.message = "PlanningSceneInterface is not initialized.";
+        return false;
+    }
+
     try {
-        place(*arm_group, nh);
+        // 获取当前附着在机械臂上的物体
+        auto attached_objects = planning_scene_interface->getAttachedObjects();
+        if (attached_objects.empty()) {
+            throw std::runtime_error("No object attached to the gripper.");
+        }
+
+        // 获取附着物体的名称
+        std::string object_name = attached_objects.begin()->second.object.id;
+        ROS_INFO("Attached object name is: %s", object_name.c_str());
+
+        // 获取传入的支持面名称
+        std::string support_surface_name = req.support_surface_name;
+
+        // 确保支持面存在
+        auto world_objects = planning_scene_interface->getObjects({support_surface_name});
+        if (world_objects.find(support_surface_name) == world_objects.end()) {
+            res.success = false;
+            res.message = "Support surface " + support_surface_name + " does not exist in the planning scene.";
+            ROS_WARN("%s", res.message.c_str());
+            return true;
+        }
+
+        // 调用place函数执行放置
+        place(*arm_group, nh, object_name, support_surface_name);
         res.success = true;
         res.message = "Place operation successful.";
     } catch (const std::exception &e) {
@@ -431,15 +515,27 @@ bool detachAndRemoveObjectCallback(kinova_gen3_lite_control::DetachAndRemoveObje
                                    kinova_gen3_lite_control::DetachAndRemoveObject::Response &res)
 {
     try {
-        // Detach the object from the robot
-        arm_group->detachObject(req.object_id);
-        ROS_INFO("Detached object: %s", req.object_id.c_str());
+        // 检查物体是否附着在机械臂上
+        auto attached_objects = planning_scene_interface->getAttachedObjects({req.object_id});
+        if (attached_objects.find(req.object_id) != attached_objects.end()) {
+            // 物体附着，执行分离操作
+            arm_group->detachObject(req.object_id);
+            ROS_INFO("Detached object: %s", req.object_id.c_str());
+        } else {
+            ROS_WARN("Object %s is not attached to the robot.", req.object_id.c_str());
+        }
 
-        // Remove the object from the planning scene
-        std::vector<std::string> object_ids;
-        object_ids.push_back(req.object_id);
-        planning_scene_interface->removeCollisionObjects(object_ids);
-        ROS_INFO("Removed object: %s", req.object_id.c_str());
+        // 检查物体是否存在于世界场景中
+        auto world_objects = planning_scene_interface->getObjects({req.object_id});
+        if (world_objects.find(req.object_id) != world_objects.end()) {
+            // 物体存在，执行移除操作
+            std::vector<std::string> object_ids;
+            object_ids.push_back(req.object_id);
+            planning_scene_interface->removeCollisionObjects(object_ids);
+            ROS_INFO("Removed object: %s from world scene.", req.object_id.c_str());
+        } else {
+            ROS_WARN("Object %s does not exist in the planning scene.", req.object_id.c_str());
+        }
 
         res.success = true;
         res.message = "Object detached and removed successfully.";

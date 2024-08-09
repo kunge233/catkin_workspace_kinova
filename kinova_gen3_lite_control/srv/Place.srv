@@ -1,3 +1,4 @@
+string support_surface_name
 ---
 bool success
 string message
