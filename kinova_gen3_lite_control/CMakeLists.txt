@@ -35,6 +35,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## System dependencies are found with CMake's conventions
 find_package(Eigen3 REQUIRED)
 find_package(Boost REQUIRED system filesystem date_time thread)
+find_package(yaml-cpp REQUIRED)
 
 ## Generate services in the 'srv' folder
 add_service_files(
@@ -50,6 +51,7 @@ add_service_files(
   Pick.srv
   Place.srv
   DetachAndRemoveObject.srv
+  ManagePose.srv
 )
 
 ## Generate added messages and services with any dependencies listed here
@@ -109,6 +111,7 @@ target_link_libraries(arm_controller
 target_link_libraries(pick_place_controller
    ${catkin_LIBRARIES}
    ${Boost_LIBRARIES}
+   yaml-cpp
 )
 
 #############

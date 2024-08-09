@@ -2,7 +2,10 @@
 #include <memory>
 #include <thread>
 #include <algorithm>
+#include <fstream>
+#include <yaml-cpp/yaml.h>
 #include <ros/ros.h>
+#include <ros/package.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
@@ -24,6 +27,7 @@
 #include <kinova_gen3_lite_control/Place.h>
 #include <kinova_gen3_lite_control/DetachAndRemoveObject.h>
 #include "kinova_gen3_lite_control/GripperValue.h"
+#include "kinova_gen3_lite_control/ManagePose.h"
 #include <kortex_driver/SendGripperCommand.h>
 #include <kortex_driver/GripperMode.h>
 
@@ -34,6 +38,9 @@ const double tau = 2 * M_PI;
 std::unique_ptr<moveit::planning_interface::MoveGroupInterface> arm_group;
 std::unique_ptr<moveit::planning_interface::MoveGroupInterface> gripper_group;
 std::unique_ptr<moveit::planning_interface::PlanningSceneInterface> planning_scene_interface;
+std::map<std::string, geometry_msgs::Pose> saved_poses;
+std::string package_path = ros::package::getPath("kinova_gen3_lite_control");
+std::string pose_file = package_path + "/config/pose_file.yaml";
 
 // 函数声明
 void openGripper(trajectory_msgs::JointTrajectory& posture);
@@ -68,6 +75,10 @@ bool moveArmToPoseCallback(kinova_gen3_lite_control::MoveArmToPose::Request &req
 bool sendGripperCommand(ros::NodeHandle n, double value);
 bool gripper_control_callback(kinova_gen3_lite_control::GripperValue::Request& req,
                               kinova_gen3_lite_control::GripperValue::Response& res);
+bool manage_pose_callback(kinova_gen3_lite_control::ManagePose::Request& req, kinova_gen3_lite_control::ManagePose::Response& res);
+void savePosesToFile(const std::string& filename) ;
+void loadPosesFromFile(const std::string& filename);
+
 
 int main(int argc, char** argv)
 {
@@ -85,6 +96,9 @@ int main(int argc, char** argv)
     arm_group->setPlannerId("RRTConnectkConfigDefault");
     arm_group->setPlanningTime(10.0);
     arm_group->setNumPlanningAttempts(10);
+
+    // 加载之前保存的姿态数据
+    loadPosesFromFile(pose_file);
 
     // 注册服务
     ros::ServiceServer add_remove_collision_object_service = nh.advertiseService(
@@ -110,6 +124,9 @@ int main(int argc, char** argv)
 
     ros::ServiceServer gripper_control_service = nh.advertiseService("gripper_control", gripper_control_callback);
     ROS_INFO("Gripper control service ready.");
+
+    ros::ServiceServer manage_pose_service = nh.advertiseService("manage_pose", manage_pose_callback);
+    ROS_INFO("Manage pose service ready.");
 
     //添加默认场景中的物体
     addCollisionObjects(planning_scene_interface, nh);
@@ -674,3 +691,175 @@ bool gripper_control_callback(kinova_gen3_lite_control::GripperValue::Request& r
     }
     return success;
 }
+
+// 保存姿态到文件
+void savePosesToFile(const std::string& filename) {
+    YAML::Emitter out;
+    out << YAML::BeginMap;
+    for (const auto& pair : saved_poses) {
+        out << YAML::Key << pair.first;
+        out << YAML::Value << YAML::Flow << YAML::BeginSeq << pair.second.position.x
+            << pair.second.position.y << pair.second.position.z
+            << pair.second.orientation.x << pair.second.orientation.y
+            << pair.second.orientation.z << pair.second.orientation.w << YAML::EndSeq;
+    }
+    out << YAML::EndMap;
+    std::ofstream fout(filename);
+    fout << out.c_str();
+}
+
+// 从文件加载姿态
+void loadPosesFromFile(const std::string& filename) {
+    std::ifstream fin(filename);
+    if (!fin) return;
+    YAML::Node node = YAML::Load(fin);
+    for (YAML::const_iterator it = node.begin(); it != node.end(); ++it) {
+        const std::string& name = it->first.as<std::string>();
+        YAML::Node pos = it->second;
+        geometry_msgs::Pose pose;
+        pose.position.x = pos[0].as<double>();
+        pose.position.y = pos[1].as<double>();
+        pose.position.z = pos[2].as<double>();
+        pose.orientation.x = pos[3].as<double>();
+        pose.orientation.y = pos[4].as<double>();
+        pose.orientation.z = pos[5].as<double>();
+        pose.orientation.w = pos[6].as<double>();
+        saved_poses[name] = pose;
+    }
+}
+
+bool manage_pose_callback(kinova_gen3_lite_control::ManagePose::Request& req, kinova_gen3_lite_control::ManagePose::Response& res) {
+    std::stringstream message_stream;
+
+    switch (req.action) {
+        case kinova_gen3_lite_control::ManagePose::Request::SAVE_POSE:
+        {
+            std::string pose_name = req.pose_name;
+            if (pose_name.empty()) {
+                pose_name = "pose_" + std::to_string(saved_poses.size() + 1);
+            }
+
+            if (saved_poses.find(pose_name) != saved_poses.end() && !req.overwrite) {
+                res.success = false;
+                res.message = "Pose name already exists. Use overwrite flag to replace it.";
+            } else {
+                geometry_msgs::Pose current_pose = arm_group->getCurrentPose().pose;
+                saved_poses[pose_name] = current_pose;
+
+                savePosesToFile(pose_file);  // 持久化保存到文件
+
+                message_stream << "Saved pose with name: " << pose_name << "\n";
+                message_stream << "Position - x: " << current_pose.position.x << ", y: " << current_pose.position.y << ", z: " << current_pose.position.z << "\n";
+                message_stream << "Orientation - x: " << current_pose.orientation.x << ", y: " << current_pose.orientation.y << ", z: " << current_pose.orientation.z << ", w: " << current_pose.orientation.w << "\n";
+
+                ROS_INFO_STREAM(message_stream.str()); // 输出到节点终端
+
+                res.success = true;
+                res.message = "Pose saved successfully.";
+            }
+            break;
+        }
+        case kinova_gen3_lite_control::ManagePose::Request::PRINT_POSE:
+        {
+            auto it = saved_poses.find(req.pose_name);
+            if (it != saved_poses.end()) {
+                const geometry_msgs::Pose& pose = it->second;
+                message_stream << "Pose with name: " << req.pose_name << "\n";
+                message_stream << "Position - x: " << pose.position.x << ", y: " << pose.position.y << ", z: " << pose.position.z << "\n";
+                message_stream << "Orientation - x: " << pose.orientation.x << ", y: " << pose.orientation.y << ", z: " << pose.orientation.z << ", w: " << pose.orientation.w << "\n";
+
+                ROS_INFO_STREAM(message_stream.str()); // 输出到节点终端
+
+                res.success = true;
+                res.message = "Pose information printed successfully.";
+            } else {
+                res.success = false;
+                res.message = "Pose not found.";
+            }
+            break;
+        }
+        case kinova_gen3_lite_control::ManagePose::Request::PRINT_ALL_POSES:
+        {
+            if (saved_poses.empty()) {
+                message_stream << "No poses have been saved yet.\n";
+                ROS_INFO_STREAM(message_stream.str()); // 输出到节点终端
+                res.success = true;
+                res.message = "No poses saved.";
+            } else {
+                for (const auto& pair : saved_poses) {
+                    const std::string& name = pair.first;
+                    const geometry_msgs::Pose& pose = pair.second;
+                    message_stream << "Pose with name: " << name << "\n";
+                    message_stream << "Position - x: " << pose.position.x << ", y: " << pose.position.y << ", z: " << pose.position.z << "\n";
+                    message_stream << "Orientation - x: " << pose.orientation.x << ", y: " << pose.orientation.y << ", z: " << pose.orientation.z << ", w: " << pose.orientation.w << "\n";
+                }
+                ROS_INFO_STREAM(message_stream.str()); // 输出到节点终端
+                res.success = true;
+                res.message = "All pose information printed successfully.";
+            }
+            break;
+        }
+        case kinova_gen3_lite_control::ManagePose::Request::MOVE_TO_POSE:
+        {
+            auto it = saved_poses.find(req.pose_name);
+            if (it != saved_poses.end()) {
+                arm_group->setPoseTarget(it->second);
+                moveit::planning_interface::MoveGroupInterface::Plan plan;
+                bool success = (arm_group->plan(plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+
+                if (success) {
+                    arm_group->move();
+                    message_stream << "Moved to pose with name: " << req.pose_name << "\n";
+                    ROS_INFO_STREAM(message_stream.str()); // 输出到节点终端
+                    res.success = true;
+                    res.message = "Moved to pose successfully.";
+                } else {
+                    res.success = false;
+                    res.message = "Failed to move to pose.";
+                }
+            } else {
+                res.success = false;
+                res.message = "Pose not found.";
+            }
+            break;
+        }
+        case kinova_gen3_lite_control::ManagePose::Request::DELETE_POSE:
+        {
+            auto it = saved_poses.find(req.pose_name);
+            if (it != saved_poses.end()) {
+                saved_poses.erase(it);
+                savePosesToFile(pose_file);  // 更新文件
+                message_stream << "Pose with name: " << req.pose_name << " deleted successfully.\n";
+                ROS_INFO_STREAM(message_stream.str()); // 输出到节点终端
+                res.success = true;
+                res.message = "Pose deleted successfully.";
+            } else {
+                res.success = false;
+                res.message = "Pose not found.";
+            }
+            break;
+        }
+        case kinova_gen3_lite_control::ManagePose::Request::CLEAR_ALL_POSES:
+        {
+            saved_poses.clear();
+            savePosesToFile(pose_file);  // 清空文件
+            message_stream << "All poses cleared.\n";
+            ROS_INFO_STREAM(message_stream.str()); // 输出到节点终端
+            res.success = true;
+            res.message = "All poses cleared.";
+            break;
+        }
+        default:
+            res.success = false;
+            res.message = "Unknown action.";
+            break;
+    }
+
+    // 如果有信息被打印，添加到响应的 message 中
+    if (!message_stream.str().empty()) {
+        res.message += "\n" + message_stream.str();
+    }
+
+    return true;
+}
+

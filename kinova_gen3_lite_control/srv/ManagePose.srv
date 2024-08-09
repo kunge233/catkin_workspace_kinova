@@ -1,0 +1,13 @@
+int8 SAVE_POSE = 0
+int8 PRINT_POSE = 1
+int8 PRINT_ALL_POSES = 2
+int8 MOVE_TO_POSE = 3
+int8 DELETE_POSE = 4
+int8 CLEAR_ALL_POSES = 5
+
+int8 action
+string pose_name
+bool overwrite  # 用于覆盖已有姿态
+---
+bool success
+string message
