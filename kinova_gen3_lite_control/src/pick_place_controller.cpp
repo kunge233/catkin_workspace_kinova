@@ -1,5 +1,6 @@
 #include <cmath>
 #include <memory>
+#include <thread>
 #include <algorithm>
 #include <ros/ros.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
@@ -22,6 +23,9 @@
 #include <kinova_gen3_lite_control/Pick.h>
 #include <kinova_gen3_lite_control/Place.h>
 #include <kinova_gen3_lite_control/DetachAndRemoveObject.h>
+#include "kinova_gen3_lite_control/GripperValue.h"
+#include <kortex_driver/SendGripperCommand.h>
+#include <kortex_driver/GripperMode.h>
 
 // The circle constant tau = 2*pi. One tau is one rotation in radians.
 const double tau = 2 * M_PI;
@@ -61,6 +65,9 @@ bool printCollisionObjectsCallback(kinova_gen3_lite_control::PrintCollisionObjec
                                    kinova_gen3_lite_control::PrintCollisionObjects::Response& res);
 bool moveArmToPoseCallback(kinova_gen3_lite_control::MoveArmToPose::Request &req,
                            kinova_gen3_lite_control::MoveArmToPose::Response &res);
+bool sendGripperCommand(ros::NodeHandle n, double value);
+bool gripper_control_callback(kinova_gen3_lite_control::GripperValue::Request& req,
+                              kinova_gen3_lite_control::GripperValue::Response& res);
 
 int main(int argc, char** argv)
 {
@@ -101,6 +108,10 @@ int main(int argc, char** argv)
     ros::ServiceServer detach_remove_service = nh.advertiseService("detach_and_remove_object", detachAndRemoveObjectCallback);
     ROS_INFO("Detach and Remove Object service ready.");
 
+    ros::ServiceServer gripper_control_service = nh.advertiseService("gripper_control", gripper_control_callback);
+    ROS_INFO("Gripper control service ready.");
+
+    //添加默认场景中的物体
     addCollisionObjects(planning_scene_interface, nh);
 
     // pick(*arm_group, nh);
@@ -617,4 +628,49 @@ bool moveArmToPoseCallback(kinova_gen3_lite_control::MoveArmToPose::Request &req
     }
 
     return true;
+}
+
+// 夹爪控制函数
+bool sendGripperCommand(ros::NodeHandle n, double value) {
+    ros::ServiceClient service_client_send_gripper_command = n.serviceClient<kortex_driver::SendGripperCommand>("/my_gen3_lite/base/send_gripper_command");
+    kortex_driver::SendGripperCommand service_send_gripper_command;
+
+    if (value < 0.0) {
+        value = 0.0;
+    } else if (value > 1.0) {
+        value = 1.0;
+    }
+
+    kortex_driver::Finger finger;
+    finger.finger_identifier = 0;
+    finger.value = 1.0 - value;
+    service_send_gripper_command.request.input.gripper.finger.push_back(finger);
+    service_send_gripper_command.request.input.mode = kortex_driver::GripperMode::GRIPPER_POSITION;
+
+    ROS_INFO("Setting gripper to value of close: %f", finger.value);
+
+    if (service_client_send_gripper_command.call(service_send_gripper_command)) {
+        ROS_INFO("The gripper command was sent successfully.");
+    } else {
+        ROS_ERROR("Failed to call service for sending gripper command");
+        return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    return true;
+}
+
+// 夹爪控制服务回调函数
+bool gripper_control_callback(kinova_gen3_lite_control::GripperValue::Request& req, kinova_gen3_lite_control::GripperValue::Response& res) {
+    ros::NodeHandle n; 
+    double value = static_cast<double>(req.value);
+    bool success = sendGripperCommand(n, value);
+
+    if (success) {
+        res.message = "Gripper command sent successfully.";
+        res.success = true;
+    } else {
+        res.message = "Failed to send gripper command.";
+        res.success = false;
+    }
+    return success;
 }
