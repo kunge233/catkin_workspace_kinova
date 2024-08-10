@@ -1,0 +1,11 @@
+# 输入参数
+float64 step_x    # X方向的步进量
+float64 step_y    # Y方向的步进量
+float64 step_z    # Z方向的步进量
+float64 step_roll # 绕X轴的旋转角度
+float64 step_pitch# 绕Y轴的旋转角度
+float64 step_yaw  # 绕Z轴的旋转角度
+---
+# 输出参数
+bool success      # 操作是否成功
+string message    # 返回的消息

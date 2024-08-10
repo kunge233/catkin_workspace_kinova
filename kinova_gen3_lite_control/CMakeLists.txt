@@ -54,6 +54,7 @@ add_service_files(
   ManagePose.srv
   PlanAndSaveTrajectory.srv
   ManageSavedPlans.srv
+  StepAdjust.srv
 )
 
 ## Generate added messages and services with any dependencies listed here

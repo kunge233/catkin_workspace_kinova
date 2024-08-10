@@ -34,6 +34,7 @@
 #include <kinova_gen3_lite_control/ManagePose.h>
 #include <kinova_gen3_lite_control/PlanAndSaveTrajectory.h>
 #include <kinova_gen3_lite_control/ManageSavedPlans.h>
+#include <kinova_gen3_lite_control/StepAdjust.h>
 #include <kortex_driver/SendGripperCommand.h>
 #include <kortex_driver/GripperMode.h>
 #include <kortex_driver/Base_ClearFaults.h>
@@ -95,6 +96,8 @@ bool planAndSaveTrajectoryCallback(kinova_gen3_lite_control::PlanAndSaveTrajecto
 bool loadPlanFromFile(const std::string& filename, moveit::planning_interface::MoveGroupInterface::Plan& plan);
 bool manageSavedPlansCallback(kinova_gen3_lite_control::ManageSavedPlans::Request &req,
                               kinova_gen3_lite_control::ManageSavedPlans::Response &res);
+bool stepAdjustCallback(kinova_gen3_lite_control::StepAdjust::Request &req,
+                        kinova_gen3_lite_control::StepAdjust::Response &res);
 
 int main(int argc, char** argv)
 {
@@ -155,6 +158,9 @@ int main(int argc, char** argv)
 
     ros::ServiceServer manage_saved_plans_service = nh.advertiseService("manage_saved_plans", manageSavedPlansCallback);
     ROS_INFO("Manage Saved Plans service ready.");
+
+    ros::ServiceServer service = nh.advertiseService("step_adjust", stepAdjustCallback);
+    ROS_INFO("Step adjust service ready.");
 
     //添加默认场景中的物体
     addCollisionObjects(planning_scene_interface, nh);
@@ -1164,7 +1170,7 @@ bool manageSavedPlansCallback(kinova_gen3_lite_control::ManageSavedPlans::Reques
         std::string file_path = package_path + "/saved_plans/" + req.plan_name + ".yaml";
         moveit::planning_interface::MoveGroupInterface::Plan plan;
         if (loadPlanFromFile(file_path, plan)) {
-            
+
             // 获取当前的机器人姿态
             moveit::core::RobotStatePtr current_state = arm_group->getCurrentState();
             arm_group->setStartState(*current_state);
@@ -1233,5 +1239,62 @@ bool manageSavedPlansCallback(kinova_gen3_lite_control::ManageSavedPlans::Reques
         res.message = "Unknown action.";
         ROS_WARN("Unknown action requested: %s", req.action.c_str());
     }
+    return true;
+}
+
+bool stepAdjustCallback(kinova_gen3_lite_control::StepAdjust::Request &req,
+                        kinova_gen3_lite_control::StepAdjust::Response &res) {
+    geometry_msgs::Pose current_pose = arm_group->getCurrentPose().pose;
+
+    // 创建一个tf2的四元数表示当前的姿态
+    tf2::Quaternion current_orientation;
+    tf2::fromMsg(current_pose.orientation, current_orientation);
+
+    current_pose.position.x += req.step_x;
+    current_pose.position.y += req.step_y;
+    current_pose.position.z += req.step_z;
+
+    double roll_rad = req.step_roll * M_PI / 180.0;
+    double pitch_rad = req.step_pitch * M_PI / 180.0;
+    double yaw_rad = req.step_yaw * M_PI / 180.0;
+
+    // 在工具坐标系中进行角度的步进调整
+    tf2::Transform tool_transform;
+    tool_transform.setOrigin(tf2::Vector3(current_pose.position.x, current_pose.position.y, current_pose.position.z));
+    tool_transform.setRotation(current_orientation);
+
+    // 创建旋转变换
+    tf2::Quaternion step_rotation;
+    step_rotation.setRPY(roll_rad, pitch_rad, yaw_rad); // 以弧度为单位
+    tf2::Transform rotation_transform;
+    rotation_transform.setOrigin(tf2::Vector3(0.0, 0.0, 0.0)); 
+    rotation_transform.setRotation(step_rotation);
+
+    // 应用旋转并更新姿态
+    tool_transform = tool_transform * rotation_transform;
+    tool_transform.getBasis().getRotation(current_orientation);
+    tf2::Vector3 new_position = tool_transform.getOrigin();
+
+    current_pose.orientation = tf2::toMsg(current_orientation);
+    current_pose.position.x = new_position.x();
+    current_pose.position.y = new_position.y();
+    current_pose.position.z = new_position.z();
+    arm_group->setPoseTarget(current_pose);
+
+    // 规划和运动执行
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    bool success = (arm_group->plan(plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+
+    if (success) {
+        arm_group->move();
+        res.success = true;
+        res.message = "Step adjustment successful.";
+        ROS_INFO("%s", res.message.c_str());
+    } else {
+        res.success = false;
+        res.message = "Step adjustment failed to plan.";
+        ROS_WARN("%s", res.message.c_str());
+    }
+
     return true;
 }
