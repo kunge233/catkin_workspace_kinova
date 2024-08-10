@@ -3,9 +3,13 @@
 #include <thread>
 #include <algorithm>
 #include <fstream>
-#include <yaml-cpp/yaml.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <ros/ros.h>
 #include <ros/package.h>
+#include "std_msgs/Empty.h"
+#include "std_srvs/Trigger.h"
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
@@ -26,10 +30,14 @@
 #include <kinova_gen3_lite_control/Pick.h>
 #include <kinova_gen3_lite_control/Place.h>
 #include <kinova_gen3_lite_control/DetachAndRemoveObject.h>
-#include "kinova_gen3_lite_control/GripperValue.h"
-#include "kinova_gen3_lite_control/ManagePose.h"
+#include <kinova_gen3_lite_control/GripperValue.h>
+#include <kinova_gen3_lite_control/ManagePose.h>
+#include <kinova_gen3_lite_control/PlanAndSaveTrajectory.h>
+#include <kinova_gen3_lite_control/ManageSavedPlans.h>
 #include <kortex_driver/SendGripperCommand.h>
 #include <kortex_driver/GripperMode.h>
+#include <kortex_driver/Base_ClearFaults.h>
+#include <yaml-cpp/yaml.h>
 
 // The circle constant tau = 2*pi. One tau is one rotation in radians.
 const double tau = 2 * M_PI;
@@ -41,6 +49,7 @@ std::unique_ptr<moveit::planning_interface::PlanningSceneInterface> planning_sce
 std::map<std::string, geometry_msgs::Pose> saved_poses;
 std::string package_path = ros::package::getPath("kinova_gen3_lite_control");
 std::string pose_file = package_path + "/config/pose_file.yaml";
+std::map<std::string, moveit::planning_interface::MoveGroupInterface::Plan> saved_plans;
 
 // 函数声明
 void openGripper(trajectory_msgs::JointTrajectory& posture);
@@ -78,7 +87,14 @@ bool gripper_control_callback(kinova_gen3_lite_control::GripperValue::Request& r
 bool manage_pose_callback(kinova_gen3_lite_control::ManagePose::Request& req, kinova_gen3_lite_control::ManagePose::Response& res);
 void savePosesToFile(const std::string& filename) ;
 void loadPosesFromFile(const std::string& filename);
-
+bool stop_robot_callback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res);
+bool clear_faults_callback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res);
+void savePlanToFile(const moveit::planning_interface::MoveGroupInterface::Plan& plan, const std::string& filename);
+bool planAndSaveTrajectoryCallback(kinova_gen3_lite_control::PlanAndSaveTrajectory::Request &req,
+                                   kinova_gen3_lite_control::PlanAndSaveTrajectory::Response &res);
+bool loadPlanFromFile(const std::string& filename, moveit::planning_interface::MoveGroupInterface::Plan& plan);
+bool manageSavedPlansCallback(kinova_gen3_lite_control::ManageSavedPlans::Request &req,
+                              kinova_gen3_lite_control::ManageSavedPlans::Response &res);
 
 int main(int argc, char** argv)
 {
@@ -127,6 +143,18 @@ int main(int argc, char** argv)
 
     ros::ServiceServer manage_pose_service = nh.advertiseService("manage_pose", manage_pose_callback);
     ROS_INFO("Manage pose service ready.");
+
+    ros::ServiceServer stop_service = nh.advertiseService("stop_robot", stop_robot_callback);
+    ROS_INFO("Stop Robot service ready.");
+
+    ros::ServiceServer clear_faults_service = nh.advertiseService("clear_faults", clear_faults_callback);
+    ROS_INFO("Clear Faults service ready.");
+
+    ros::ServiceServer plan_and_save_service = nh.advertiseService("plan_and_save_trajectory", planAndSaveTrajectoryCallback);
+    ROS_INFO("Plan and Save Trajectory service ready.");
+
+    ros::ServiceServer manage_saved_plans_service = nh.advertiseService("manage_saved_plans", manageSavedPlansCallback);
+    ROS_INFO("Manage Saved Plans service ready.");
 
     //添加默认场景中的物体
     addCollisionObjects(planning_scene_interface, nh);
@@ -959,3 +987,251 @@ bool manage_pose_callback(kinova_gen3_lite_control::ManagePose::Request& req, ki
     return true;
 }
 
+bool stop_robot_callback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res) {
+    arm_group->stop();
+    gripper_group->stop();
+    ROS_INFO("MoveIt stop command executed.");
+    res.message = "Robot movement stopped successfully.";
+    res.success = true;
+    return true;
+}
+
+void clearFaultsCommand() {
+    // 清除故障指令
+    std::string clear_faults_topic = "/my_gen3_lite/in/clear_faults";
+
+    static ros::Publisher clear_faults_pub;
+    if (!clear_faults_pub) {
+        clear_faults_pub = ros::NodeHandle().advertise<std_msgs::Empty>(clear_faults_topic, 10);
+    }
+
+    std_msgs::Empty clear_faults_command;
+    clear_faults_pub.publish(clear_faults_command);
+    ROS_INFO("Clear faults command published!");
+}
+
+bool clear_faults_callback(std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res) {
+    clearFaultsCommand();
+    ROS_INFO("Clear Robot faults service called.");
+    res.message = "Clear faults successfully.";
+    res.success = true;
+    return true; 
+}
+
+// 保存计划到文件的函数
+void savePlanToFile(const moveit::planning_interface::MoveGroupInterface::Plan& plan, const std::string& filename) {
+    YAML::Emitter out;
+    out << YAML::BeginMap;
+
+    // 保存关节名称
+    out << YAML::Key << "joint_names" << YAML::Value << YAML::Flow << plan.trajectory_.joint_trajectory.joint_names;
+
+    out << YAML::Key << "trajectory";
+    out << YAML::Value << YAML::BeginSeq;
+    for (const auto& point : plan.trajectory_.joint_trajectory.points) {
+        out << YAML::BeginMap;
+        out << YAML::Key << "positions" << YAML::Value << YAML::Flow << point.positions;
+        out << YAML::Key << "velocities" << YAML::Value << YAML::Flow << point.velocities;
+        out << YAML::Key << "accelerations" << YAML::Value << YAML::Flow << point.accelerations;
+        out << YAML::Key << "effort" << YAML::Value << YAML::Flow << point.effort;
+        out << YAML::Key << "time_from_start" << YAML::Value << point.time_from_start.toSec();
+        out << YAML::EndMap;
+    }
+    out << YAML::EndSeq;
+    out << YAML::EndMap;
+
+    std::ofstream fout(filename);
+    fout << out.c_str();
+    fout.close();
+    ROS_INFO("Plan saved to file: %s", filename.c_str());
+}
+
+bool planAndSaveTrajectoryCallback(kinova_gen3_lite_control::PlanAndSaveTrajectory::Request &req,
+                                   kinova_gen3_lite_control::PlanAndSaveTrajectory::Response &res)
+{
+    std::vector<geometry_msgs::Pose> waypoints;
+
+    // 从文件中读取指定的路点
+    for (const auto& name : req.waypoint_names) {
+        auto it = saved_poses.find(name);
+        if (it != saved_poses.end()) {
+            waypoints.push_back(it->second);
+            ROS_INFO("Waypoint %s loaded.", name.c_str());
+        } else {
+            res.success = false;
+            res.message = "Waypoint " + name + " not found.";
+            ROS_WARN("Waypoint %s not found.", name.c_str());
+            return true;
+        }
+    }
+
+    if (waypoints.empty()) {
+        res.success = false;
+        res.message = "No waypoints were loaded.";
+        ROS_WARN("No waypoints were loaded.");
+        return true;
+    }
+
+    // 使用computeCartesianPath方法计算轨迹
+    moveit_msgs::RobotTrajectory trajectory;
+    const double jump_threshold = 0.0;
+    const double eef_step = 0.01;
+    double fraction = arm_group->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
+
+    if (fraction < 0.95) {  // 如果成功率低于95%
+        res.success = false;
+        res.message = "Cartesian path planning failed. Only " + std::to_string(fraction * 100.0) + "% of path planned.";
+        ROS_WARN("Cartesian path planning failed. Only %.2f%% of path planned.", fraction * 100.0);
+        return true;
+    }
+
+    // 成功规划，创建一个Plan对象并保存
+    moveit::planning_interface::MoveGroupInterface::Plan my_plan;
+    my_plan.trajectory_ = trajectory;
+    saved_plans[req.plan_name] = my_plan;
+
+    // 构造文件路径，并保存计划到文件
+    std::string file_path = package_path + "/saved_plans/" + req.plan_name + ".yaml";
+    savePlanToFile(my_plan, file_path);
+
+    res.success = true;
+    res.message = "Plan saved successfully.";
+
+    if (req.execute_now) {
+        arm_group->execute(my_plan);
+        ROS_INFO("Plan executed successfully.");
+        res.message += " Plan executed.";
+    } else {
+        ROS_INFO("Plan saved but not executed.");
+        res.message += " Plan saved but not executed.";
+    }
+
+    return true;
+}
+
+// 从文件中加载计划的函数
+bool loadPlanFromFile(const std::string& filename, moveit::planning_interface::MoveGroupInterface::Plan& plan) {
+    std::ifstream fin(filename);
+    if (!fin) {
+        ROS_ERROR("Could not open file: %s", filename.c_str());
+        return false;
+    }
+
+    YAML::Node doc = YAML::Load(fin);
+    fin.close();
+
+    if (!doc["joint_names"] || !doc["trajectory"] || !doc["trajectory"].IsSequence()) {
+        ROS_ERROR("Invalid format in file: %s", filename.c_str());
+        return false;
+    }
+
+    plan.trajectory_.joint_trajectory.joint_names = doc["joint_names"].as<std::vector<std::string>>();
+
+    for (const YAML::Node& point_node : doc["trajectory"]) {
+        trajectory_msgs::JointTrajectoryPoint point;
+
+        if (!point_node["positions"] || !point_node["positions"].IsSequence()) {
+            ROS_ERROR("Invalid 'positions' data in file: %s", filename.c_str());
+            return false;
+        }
+        point.positions = point_node["positions"].as<std::vector<double>>();
+
+        if (point_node["velocities"] && point_node["velocities"].IsSequence()) {
+            point.velocities = point_node["velocities"].as<std::vector<double>>();
+        }
+
+        if (point_node["accelerations"] && point_node["accelerations"].IsSequence()) {
+            point.accelerations = point_node["accelerations"].as<std::vector<double>>();
+        }
+
+        if (point_node["effort"] && point_node["effort"].IsSequence()) {
+            point.effort = point_node["effort"].as<std::vector<double>>();
+        }
+
+        point.time_from_start = ros::Duration(point_node["time_from_start"].as<double>());
+
+        plan.trajectory_.joint_trajectory.points.push_back(point);
+    }
+
+    ROS_INFO("Plan loaded from file: %s", filename.c_str());
+    return true;
+}
+
+bool manageSavedPlansCallback(kinova_gen3_lite_control::ManageSavedPlans::Request &req,
+                              kinova_gen3_lite_control::ManageSavedPlans::Response &res)
+{
+    if (req.action == "execute") {
+        std::string file_path = package_path + "/saved_plans/" + req.plan_name + ".yaml";
+        moveit::planning_interface::MoveGroupInterface::Plan plan;
+        if (loadPlanFromFile(file_path, plan)) {
+            
+            // 获取当前的机器人姿态
+            moveit::core::RobotStatePtr current_state = arm_group->getCurrentState();
+            arm_group->setStartState(*current_state);
+
+            // 规划从当前姿态到计划路径起点的路径
+            arm_group->setJointValueTarget(plan.trajectory_.joint_trajectory.points.front().positions);
+            moveit::planning_interface::MoveGroupInterface::Plan transition_plan;
+            bool success = (arm_group->plan(transition_plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+
+            if (success) {
+                arm_group->execute(transition_plan);  // 先移动到计划的起点
+                arm_group->execute(plan);  // 然后执行原计划
+                res.success = true;
+                res.message = "Plan " + req.plan_name + " executed successfully.";
+                ROS_INFO("%s", res.message.c_str());
+            } else {
+                res.success = false;
+                res.message = "Failed to plan path to the starting position of the saved plan.";
+                ROS_WARN("%s", res.message.c_str());
+            }
+        } else {
+            res.success = false;
+            res.message = "Plan " + req.plan_name + " could not be loaded.";
+            ROS_WARN("%s", res.message.c_str());
+        }
+    } else if (req.action == "print_all") {
+        DIR *dir;
+        struct dirent *ent;
+        if ((dir = opendir((package_path + "/saved_plans/").c_str())) != NULL) {
+            while ((ent = readdir(dir)) != NULL) {
+                if (ent->d_type == DT_REG) { // regular file
+                    std::string plan_name = std::string(ent->d_name);
+                    // 删除扩展名 ".yaml"
+                    size_t lastindex = plan_name.find_last_of(".");
+                    if (lastindex != std::string::npos) {
+                        plan_name = plan_name.substr(0, lastindex);
+                    }
+                    res.all_plans.push_back(plan_name);
+                }
+            }
+            closedir(dir);
+            res.success = true;
+            res.message = "All plans listed.";
+            ROS_INFO("All saved plans:");
+            for (const auto& plan : res.all_plans) {
+                ROS_INFO("Plan: %s", plan.c_str());
+            }
+        } else {
+            res.success = false;
+            res.message = "Could not open saved plans directory.";
+            ROS_ERROR("%s", res.message.c_str());
+        }
+    } else if (req.action == "print_plan") {
+        std::string file_path = package_path + "/saved_plans/" + req.plan_name + ".yaml";
+        if (std::ifstream(file_path)) {
+            res.success = true;
+            res.message = "Plan " + req.plan_name + " found.";
+            ROS_INFO("Plan %s exists.", req.plan_name.c_str());
+        } else {
+            res.success = false;
+            res.message = "Plan " + req.plan_name + " not found.";
+            ROS_WARN("%s", res.message.c_str());
+        }
+    } else {
+        res.success = false;
+        res.message = "Unknown action.";
+        ROS_WARN("Unknown action requested: %s", req.action.c_str());
+    }
+    return true;
+}

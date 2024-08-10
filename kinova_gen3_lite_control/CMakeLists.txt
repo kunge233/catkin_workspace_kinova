@@ -52,6 +52,8 @@ add_service_files(
   Place.srv
   DetachAndRemoveObject.srv
   ManagePose.srv
+  PlanAndSaveTrajectory.srv
+  ManageSavedPlans.srv
 )
 
 ## Generate added messages and services with any dependencies listed here

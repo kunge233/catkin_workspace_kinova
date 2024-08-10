@@ -1,0 +1,2 @@
+saved_plans文件夹用于存储生成的轨迹规划计划信息，以供程序调用执行。
+plan1是基于路点retract->home->vertical的轨迹计划

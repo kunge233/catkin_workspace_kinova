@@ -1,0 +1,6 @@
+string action   # "execute", "print_all", "print_plan"
+string plan_name # 只有在"execute"和"print_plan"时使用
+---
+bool success
+string message
+string[] all_plans # 只有在"print_all"时使用

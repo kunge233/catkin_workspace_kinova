@@ -1,0 +1,6 @@
+string[] waypoint_names
+string plan_name
+bool execute_now
+---
+bool success
+string message
