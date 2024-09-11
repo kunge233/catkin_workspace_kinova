@@ -55,6 +55,7 @@ add_service_files(
   PlanAndSaveTrajectory.srv
   ManageSavedPlans.srv
   StepAdjust.srv
+  RefreshObject.srv
 )
 
 ## Generate added messages and services with any dependencies listed here
@@ -67,7 +68,7 @@ generate_messages(
 
 ## The catkin_package macro generates cmake config files for your package
 catkin_package(
-  INCLUDE_DIRS include
+  #INCLUDE_DIRS include
   LIBRARIES kinova_gen3_lite_control
   CATKIN_DEPENDS
     roscpp

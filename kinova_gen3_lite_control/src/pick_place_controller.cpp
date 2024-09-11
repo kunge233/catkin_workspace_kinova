@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <fstream>
 #include <dirent.h>
+#include <mutex>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <ros/ros.h>
@@ -11,6 +12,7 @@
 #include "std_msgs/Empty.h"
 #include "std_srvs/Trigger.h"
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <moveit/planning_scene/planning_scene.h>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 #include <moveit/robot_state/robot_state.h>
@@ -19,6 +21,8 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2/LinearMath/Vector3.h>
 #include <tf2/LinearMath/Transform.h>
+#include <tf2_eigen/tf2_eigen.h>
+#include <Eigen/Geometry>
 #include <geometric_shapes/shapes.h>
 #include <geometry_msgs/Pose.h>
 #include <geometry_msgs/Point.h>
@@ -35,6 +39,7 @@
 #include <kinova_gen3_lite_control/PlanAndSaveTrajectory.h>
 #include <kinova_gen3_lite_control/ManageSavedPlans.h>
 #include <kinova_gen3_lite_control/StepAdjust.h>
+#include <kinova_gen3_lite_control/RefreshObject.h>
 #include <kortex_driver/SendGripperCommand.h>
 #include <kortex_driver/GripperMode.h>
 #include <kortex_driver/Base_ClearFaults.h>
@@ -64,14 +69,17 @@ tf2::Quaternion getRelativeOrientation(const tf2::Quaternion& current_orientatio
                                       const tf2::Quaternion& target_orientation);
 void getRelativeEulerAngles(const tf2::Quaternion& relative_orientation,
                             double& roll, double& pitch, double& yaw);
-void pick(moveit::planning_interface::MoveGroupInterface& move_group, 
+moveit::core::MoveItErrorCode pick(moveit::planning_interface::MoveGroupInterface& move_group, 
           ros::NodeHandle& node_handle);
-void place(moveit::planning_interface::MoveGroupInterface& move_group,
+moveit::core::MoveItErrorCode place(moveit::planning_interface::MoveGroupInterface& move_group,
            ros::NodeHandle& node_handle);
 bool pickCallback(kinova_gen3_lite_control::Pick::Request &req,
                   kinova_gen3_lite_control::Pick::Response &res);
 bool placeCallback(kinova_gen3_lite_control::Place::Request &req,
                    kinova_gen3_lite_control::Place::Response &res);
+void refreshObject(const std::string& object_id);
+bool refreshObjectService(kinova_gen3_lite_control::RefreshObject::Request &req,
+                          kinova_gen3_lite_control::RefreshObject::Response &res);
 bool detachAndRemoveObjectCallback(kinova_gen3_lite_control::DetachAndRemoveObject::Request &req,
                                    kinova_gen3_lite_control::DetachAndRemoveObject::Response &res);
 void addCollisionObjects(std::unique_ptr<moveit::planning_interface::PlanningSceneInterface>& planning_scene_interface, 
@@ -80,6 +88,8 @@ bool addRemoveCollisionObjectCallback(kinova_gen3_lite_control::AddRemoveCollisi
                                       kinova_gen3_lite_control::AddRemoveCollisionObject::Response& res);
 bool printCollisionObjectsCallback(kinova_gen3_lite_control::PrintCollisionObjects::Request& req,
                                    kinova_gen3_lite_control::PrintCollisionObjects::Response& res);
+void resetPlanningScene(moveit::planning_interface::PlanningSceneInterface& planning_scene_interface,
+                        moveit::planning_interface::MoveGroupInterface& arm_group);
 bool moveArmToPoseCallback(kinova_gen3_lite_control::MoveArmToPose::Request &req,
                            kinova_gen3_lite_control::MoveArmToPose::Response &res);
 bool sendGripperCommand(ros::NodeHandle n, double value);
@@ -112,7 +122,7 @@ int main(int argc, char** argv)
     gripper_group = std::unique_ptr<moveit::planning_interface::MoveGroupInterface>(new moveit::planning_interface::MoveGroupInterface("gripper"));
     planning_scene_interface = std::unique_ptr<moveit::planning_interface::PlanningSceneInterface>(new moveit::planning_interface::PlanningSceneInterface());
 
-    arm_group->setPlannerId("RRTConnectkConfigDefault");
+    arm_group->setPlannerId("BiTRRT");
     arm_group->setPlanningTime(10.0);
     arm_group->setNumPlanningAttempts(10);
 
@@ -159,9 +169,13 @@ int main(int argc, char** argv)
     ros::ServiceServer manage_saved_plans_service = nh.advertiseService("manage_saved_plans", manageSavedPlansCallback);
     ROS_INFO("Manage Saved Plans service ready.");
 
-    ros::ServiceServer service = nh.advertiseService("step_adjust", stepAdjustCallback);
+    ros::ServiceServer step_adjust_service = nh.advertiseService("step_adjust", stepAdjustCallback);
     ROS_INFO("Step adjust service ready.");
 
+    ros::ServiceServer refresh_object_service = nh.advertiseService("refresh_object", refreshObjectService);
+    ROS_INFO("Ready to refresh objects.");
+
+    resetPlanningScene(*planning_scene_interface, *arm_group);   
     //添加默认场景中的物体
     addCollisionObjects(planning_scene_interface, nh);
 
@@ -310,7 +324,7 @@ void getRelativeEulerAngles(const tf2::Quaternion& relative_orientation,
     ROS_INFO("Relative Euler Angles (radians) - Roll: %f, Pitch: %f, Yaw: %f", roll, pitch, yaw);
 }
 
-void pick(moveit::planning_interface::MoveGroupInterface& move_group, 
+moveit::core::MoveItErrorCode pick(moveit::planning_interface::MoveGroupInterface& move_group, 
           ros::NodeHandle& node_handle,
           const std::string& object_name,
           const std::string& support_surface_name,
@@ -387,11 +401,16 @@ void pick(moveit::planning_interface::MoveGroupInterface& move_group,
 
     // 调用 pick 函数执行抓取
     ROS_INFO("Picking object: %s on surface: %s with gripper position: %f", object_name.c_str(), support_surface_name.c_str(), gripper_position);
-    move_group.pick(object_name, grasps);
-    ROS_INFO("Pick Finished.^-^");
+    moveit::core::MoveItErrorCode success_code = move_group.pick(object_name, grasps);
+    if (success_code == moveit::core::MoveItErrorCode::SUCCESS) {
+        ROS_INFO("Pick operation successful!^-^");
+    } else {
+        ROS_WARN("Pick operation failed with error code: %d", success_code.val);
+    }
+    return success_code;
 }
 
-void place(moveit::planning_interface::MoveGroupInterface& move_group,
+moveit::core::MoveItErrorCode place(moveit::planning_interface::MoveGroupInterface& move_group,
            ros::NodeHandle& node_handle,
            const std::string& object_name,
            const std::string& support_surface_name)
@@ -449,14 +468,22 @@ void place(moveit::planning_interface::MoveGroupInterface& move_group,
     place_location[0].pre_place_approach.min_distance = object_dimensions[2] / 2 + 0.05;
     place_location[0].pre_place_approach.desired_distance = object_dimensions[2] / 2 + 0.1;
 
-    // 设置放置后的撤退姿态
-    tf2::Vector3 retreat_direction = -approach_direction;
+    // 设置放置后的撤退姿态（z轴正方向）
     place_location[0].post_place_retreat.direction.header.frame_id = "base_link";
-    place_location[0].post_place_retreat.direction.vector.x = retreat_direction.x();
-    place_location[0].post_place_retreat.direction.vector.y = retreat_direction.y();
-    place_location[0].post_place_retreat.direction.vector.z = 0.0; // z = 0
+    place_location[0].post_place_retreat.direction.vector.x = 0.0;
+    place_location[0].post_place_retreat.direction.vector.y = 0.0;
+    place_location[0].post_place_retreat.direction.vector.z = 1.0; // z = 1
     place_location[0].post_place_retreat.min_distance = 0.1;
     place_location[0].post_place_retreat.desired_distance = 0.25;
+
+    // // 设置放置后的撤退姿态 (向心方向)
+    // tf2::Vector3 retreat_direction = -approach_direction;
+    // place_location[0].post_place_retreat.direction.header.frame_id = "base_link";
+    // place_location[0].post_place_retreat.direction.vector.x = retreat_direction.x();
+    // place_location[0].post_place_retreat.direction.vector.y = retreat_direction.y();
+    // place_location[0].post_place_retreat.direction.vector.z = 0.0; // z = 0
+    // place_location[0].post_place_retreat.min_distance = 0.1;
+    // place_location[0].post_place_retreat.desired_distance = 0.25;
 
     // 设置放置后的夹爪姿态为打开
     openGripper(place_location[0].post_place_posture);
@@ -466,8 +493,14 @@ void place(moveit::planning_interface::MoveGroupInterface& move_group,
 
     // 调用 place 函数将对象放置到指定的位置
     ROS_INFO("Placing object: %s on surface: %s", object_name.c_str(), support_surface_name.c_str());
-    move_group.place(object_name, place_location);
-    ROS_INFO("Place Finished.^-^");
+    moveit::core::MoveItErrorCode success_code = move_group.place(object_name, place_location);
+    if (success_code == moveit::core::MoveItErrorCode::SUCCESS) {
+        ROS_INFO("Place operation successful!^-^");
+        refreshObject(object_name);
+    } else {
+        ROS_WARN("Place operation failed with error code: %d", success_code.val);
+    }
+    return success_code;
 }
 
 bool pickCallback(kinova_gen3_lite_control::Pick::Request &req,
@@ -490,12 +523,20 @@ bool pickCallback(kinova_gen3_lite_control::Pick::Request &req,
         std::string support_surface_name = req.support_surface_name;
 
         // 传递输入的 gripper_position 值（0~1），-1表示使用默认计算值
-        pick(*arm_group, nh, object_name, support_surface_name, req.gripper_position);
-        res.success = true;
-        res.message = "Pick operation successful.";
+        moveit::core::MoveItErrorCode success_code = pick(*arm_group, nh, object_name, support_surface_name, req.gripper_position);
+        if (success_code == moveit::core::MoveItErrorCode::SUCCESS) {
+            res.success = true;
+            res.message = "Pick operation successful.";
+            ROS_INFO("Pick operation successful.");
+        } else {
+            res.success = false;
+            res.message = "Pick operation failed with error code: " + std::to_string(success_code.val);
+            ROS_WARN("Pick operation failed with error code: %d", success_code.val);
+        }
     } catch (const std::exception &e) {
         res.success = false;
         res.message = e.what();
+        ROS_ERROR("Pick operation failed: %s", e.what());
     }
     return true;
 }
@@ -535,9 +576,89 @@ bool placeCallback(kinova_gen3_lite_control::Place::Request &req,
         }
 
         // 调用place函数执行放置
-        place(*arm_group, nh, object_name, support_surface_name);
+        moveit::core::MoveItErrorCode success_code = place(*arm_group, nh, object_name, support_surface_name);
+        if (success_code == moveit::core::MoveItErrorCode::SUCCESS) {
+            res.success = true;
+            res.message = "Place operation successful.";
+            ROS_INFO("Place operation successful.");
+        } else {
+            res.success = false;
+            res.message = "Place operation failed with error code: " + std::to_string(success_code.val);
+            ROS_WARN("Place operation failed with error code: %d", success_code.val);
+        }
+    } catch (const std::exception &e) {
+        res.success = false;
+        res.message = e.what();
+        ROS_ERROR("Place operation failed: %s", e.what());
+    }
+    return true;
+}
+
+void refreshObject(const std::string &object_id) {
+    ros::NodeHandle nh;
+
+    auto world_objects = planning_scene_interface->getObjects({object_id});
+
+    if (world_objects.find(object_id) == world_objects.end()) {
+        ROS_WARN("Object %s does not exist in the planning scene.", object_id.c_str());
+        return;
+    }
+
+    geometry_msgs::Pose object_pose = world_objects[object_id].pose;
+    std::vector<double> object_dimensions = world_objects[object_id].primitives[0].dimensions;
+
+    ROS_INFO("Object Pose - Position: [x: %f, y: %f, z: %f]", 
+             object_pose.position.x, object_pose.position.y, object_pose.position.z);
+    ROS_INFO("Object Pose - Orientation: [x: %f, y: %f, z: %f, w: %f]", 
+             object_pose.orientation.x, object_pose.orientation.y, 
+             object_pose.orientation.z, object_pose.orientation.w);
+
+    ros::ServiceClient detach_remove_client = nh.serviceClient<kinova_gen3_lite_control::DetachAndRemoveObject>("/my_gen3_lite/detach_and_remove_object");
+    kinova_gen3_lite_control::DetachAndRemoveObject detach_remove_srv;
+    detach_remove_srv.request.object_id = object_id;
+
+    if (detach_remove_client.call(detach_remove_srv)) {
+        if (detach_remove_srv.response.success) {
+            ROS_INFO("Successfully detached and removed object: %s", object_id.c_str());
+        } else {
+            ROS_WARN("Failed to detach and remove object: %s", object_id.c_str());
+        }
+    } else {
+        ROS_ERROR("Failed to call service detach_and_remove_object");
+        return;
+    }
+
+    ros::ServiceClient add_collision_client = nh.serviceClient<kinova_gen3_lite_control::AddRemoveCollisionObject>("/my_gen3_lite/add_remove_collision_object");
+    kinova_gen3_lite_control::AddRemoveCollisionObject add_collision_srv;
+    add_collision_srv.request.object_id = object_id;
+    add_collision_srv.request.action = "add";
+    add_collision_srv.request.pose.position = object_pose.position;  // 使用获取的位置信息
+    add_collision_srv.request.dimensions = object_dimensions;  // 使用获取的尺寸信息
+
+    //重置姿态
+    add_collision_srv.request.pose.orientation.x = 0;
+    add_collision_srv.request.pose.orientation.y = 0;
+    add_collision_srv.request.pose.orientation.z = 0;
+    add_collision_srv.request.pose.orientation.w = 1;
+
+    if (add_collision_client.call(add_collision_srv)) {
+        if (add_collision_srv.response.success) {
+            ROS_INFO("Successfully added collision object: %s", object_id.c_str());
+        } else {
+            ROS_WARN("Failed to add collision object: %s", object_id.c_str());
+        }
+    } else {
+        ROS_ERROR("Failed to call service add_remove_collision_object");
+    }
+}
+
+bool refreshObjectService(kinova_gen3_lite_control::RefreshObject::Request &req,
+                          kinova_gen3_lite_control::RefreshObject::Response &res) {
+    try {
+        // 调用 refreshObject 函数
+        refreshObject(req.object_id);
         res.success = true;
-        res.message = "Place operation successful.";
+        res.message = "Object refreshed successfully.";
     } catch (const std::exception &e) {
         res.success = false;
         res.message = e.what();
@@ -585,7 +706,7 @@ void addCollisionObjects(std::unique_ptr<moveit::planning_interface::PlanningSce
 {
     // 创建环境
     std::vector<moveit_msgs::CollisionObject> collision_objects;
-    collision_objects.resize(3);
+    collision_objects.resize(4);
 
     // 第1个桌子
     collision_objects[0].id = "table1";
@@ -635,11 +756,27 @@ void addCollisionObjects(std::unique_ptr<moveit::planning_interface::PlanningSce
     collision_objects[2].primitive_poses[0].orientation.w = 1.0;
     collision_objects[2].operation = collision_objects[2].ADD;
 
+    // 第3个桌子
+    collision_objects[3].id = "table3";
+    collision_objects[3].header.frame_id = "base_link";
+    collision_objects[3].primitives.resize(1);
+    collision_objects[3].primitives[0].type = collision_objects[3].primitives[0].BOX;
+    collision_objects[3].primitives[0].dimensions.resize(3);
+    collision_objects[3].primitives[0].dimensions[0] = 0.3;
+    collision_objects[3].primitives[0].dimensions[1] = 0.3;
+    collision_objects[3].primitives[0].dimensions[2] = 0.06;
+    collision_objects[3].primitive_poses.resize(1);
+    collision_objects[3].primitive_poses[0].position.x = -0.5;
+    collision_objects[3].primitive_poses[0].position.y = -0.5;
+    collision_objects[3].primitive_poses[0].position.z = 0;
+    collision_objects[3].primitive_poses[0].orientation.w = 1.0;
+    collision_objects[3].operation = collision_objects[3].ADD;
+
     // 应用到规划场景
     planning_scene_interface->applyCollisionObjects(collision_objects);
 }
 
-// 回调函数：添加或删除碰撞物体
+// 添加或删除碰撞物体
 bool addRemoveCollisionObjectCallback(kinova_gen3_lite_control::AddRemoveCollisionObject::Request& req,
                                       kinova_gen3_lite_control::AddRemoveCollisionObject::Response& res)
 {
@@ -730,6 +867,31 @@ bool printCollisionObjectsCallback(kinova_gen3_lite_control::PrintCollisionObjec
     }
 }
 
+void resetPlanningScene(moveit::planning_interface::PlanningSceneInterface& planning_scene_interface,
+                        moveit::planning_interface::MoveGroupInterface& arm_group) {
+    // 获取当前场景中所有的碰撞物体的ID
+    std::vector<std::string> object_ids = planning_scene_interface.getKnownObjectNames();
+    
+    // 获取所有附着在机械臂末端的物体
+    std::map<std::string, moveit_msgs::AttachedCollisionObject> attached_objects = planning_scene_interface.getAttachedObjects();
+
+    // 如果有附着物体，则将它们从机械臂上分离
+    for (const auto& attached_object : attached_objects) {
+        arm_group.detachObject(attached_object.first);  // 分离附着物体
+        ROS_INFO("Detached object: %s", attached_object.first.c_str());
+    }
+    
+    // 移除场景中的所有物体
+    if (!object_ids.empty()) {
+        planning_scene_interface.removeCollisionObjects(object_ids);
+        for (const auto& object_id : object_ids) {
+            ROS_INFO("Removed object: %s from world scene.", object_id.c_str());
+        }
+    }
+
+    ROS_INFO("Cleared all objects and detached any attached objects from the planning scene.");
+}
+
 bool moveArmToPoseCallback(kinova_gen3_lite_control::MoveArmToPose::Request &req,
                            kinova_gen3_lite_control::MoveArmToPose::Response &res)
 {
@@ -762,7 +924,7 @@ bool moveArmToPoseCallback(kinova_gen3_lite_control::MoveArmToPose::Request &req
     arm_group->setPoseTarget(target_pose);
     moveit::planning_interface::MoveGroupInterface::Plan plan;
 
-    bool success = (arm_group->plan(plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+    bool success = (arm_group->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
     if (success) {
         arm_group->move();
         res.success = true;
@@ -859,6 +1021,7 @@ void loadPosesFromFile(const std::string& filename) {
 }
 
 bool manage_pose_callback(kinova_gen3_lite_control::ManagePose::Request& req, kinova_gen3_lite_control::ManagePose::Response& res) {
+    // std::lock_guard<std::mutex> lock2(arm_group_mutex);  
     std::stringstream message_stream;
 
     switch (req.action) {
@@ -935,7 +1098,7 @@ bool manage_pose_callback(kinova_gen3_lite_control::ManagePose::Request& req, ki
             if (it != saved_poses.end()) {
                 arm_group->setPoseTarget(it->second);
                 moveit::planning_interface::MoveGroupInterface::Plan plan;
-                bool success = (arm_group->plan(plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+                bool success = (arm_group->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
                 if (success) {
                     arm_group->move();
@@ -1054,7 +1217,7 @@ void savePlanToFile(const moveit::planning_interface::MoveGroupInterface::Plan& 
 
 bool planAndSaveTrajectoryCallback(kinova_gen3_lite_control::PlanAndSaveTrajectory::Request &req,
                                    kinova_gen3_lite_control::PlanAndSaveTrajectory::Response &res)
-{
+{ 
     std::vector<geometry_msgs::Pose> waypoints;
 
     // 从文件中读取指定的路点
@@ -1178,7 +1341,7 @@ bool manageSavedPlansCallback(kinova_gen3_lite_control::ManageSavedPlans::Reques
             // 规划从当前姿态到计划路径起点的路径
             arm_group->setJointValueTarget(plan.trajectory_.joint_trajectory.points.front().positions);
             moveit::planning_interface::MoveGroupInterface::Plan transition_plan;
-            bool success = (arm_group->plan(transition_plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+            bool success = (arm_group->plan(transition_plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
             if (success) {
                 arm_group->execute(transition_plan);  // 先移动到计划的起点
@@ -1283,7 +1446,7 @@ bool stepAdjustCallback(kinova_gen3_lite_control::StepAdjust::Request &req,
 
     // 规划和运动执行
     moveit::planning_interface::MoveGroupInterface::Plan plan;
-    bool success = (arm_group->plan(plan) == moveit::planning_interface::MoveItErrorCode::SUCCESS);
+    bool success = (arm_group->plan(plan) == moveit::core::MoveItErrorCode::SUCCESS);
 
     if (success) {
         arm_group->move();
